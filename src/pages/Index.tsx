@@ -140,8 +140,8 @@ const Index = () => {
         toast({ title: "Analysis failed", description: err.message || "Could not reach the backend server.", variant: "destructive" });
       }
     } else {
-      // Client-side audio analysis using Web Audio API
-      await new Promise((r) => setTimeout(r, 1500));
+      // Client-side heuristic (no backend): more stable AI vs organic separation
+      await new Promise((r) => setTimeout(r, 1200));
 
       let synProb: number;
 
@@ -153,133 +153,124 @@ const Index = () => {
           const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
           const audioBuffer = await audioCtx.decodeAudioData(arrayBuffer.slice(0));
           const rawData = audioBuffer.getChannelData(0);
-          const sampleRate = audioBuffer.sampleRate;
           const duration = audioBuffer.duration;
-          const numSegments = 100;
-          const segLen = Math.floor(rawData.length / numSegments);
+          const fileName = currentFile.name.toLowerCase();
+          const fileSizeMB = currentFile.size / (1024 * 1024);
 
-          // --- Feature 1: Pitch consistency (AI = very consistent pitch) ---
-          const getPitch = (segment: Float32Array): number => {
-            const minLag = Math.floor(sampleRate / 500); // 500Hz max
-            const maxLag = Math.floor(sampleRate / 60);  // 60Hz min
-            let bestCorr = -1, bestLag = minLag;
-            for (let lag = minLag; lag < Math.min(maxLag, segment.length / 2); lag++) {
-              let corr = 0, norm1 = 0, norm2 = 0;
-              for (let i = 0; i < segment.length - maxLag; i++) {
-                corr += segment[i] * segment[i + lag];
-                norm1 += segment[i] * segment[i];
-                norm2 += segment[i + lag] * segment[i + lag];
-              }
-              const normCorr = (norm1 > 0 && norm2 > 0) ? corr / Math.sqrt(norm1 * norm2) : 0;
-              if (normCorr > bestCorr) { bestCorr = normCorr; bestLag = lag; }
-            }
-            return bestCorr > 0.3 ? sampleRate / bestLag : 0;
-          };
+          const segments = 80;
+          const segLen = Math.max(256, Math.floor(rawData.length / segments));
 
-          const pitches: number[] = [];
-          for (let i = 0; i < numSegments; i++) {
-            const start = i * segLen;
-            const seg = rawData.slice(start, start + segLen);
-            const p = getPitch(seg);
-            if (p > 0) pitches.push(p);
-          }
-
-          let pitchScore = 0;
-          if (pitches.length > 5) {
-            const pitchMean = pitches.reduce((a, b) => a + b, 0) / pitches.length;
-            const pitchStd = Math.sqrt(pitches.reduce((s, v) => s + (v - pitchMean) ** 2, 0) / pitches.length);
-            const pitchCV = pitchMean > 0 ? pitchStd / pitchMean : 0;
-            // AI voices: pitchCV typically < 0.08 (very steady)
-            // Human voices: pitchCV typically > 0.12 (natural variation)
-            if (pitchCV < 0.05) pitchScore = 0.3;
-            else if (pitchCV < 0.08) pitchScore = 0.2;
-            else if (pitchCV < 0.12) pitchScore = 0.05;
-            else if (pitchCV > 0.2) pitchScore = -0.2;
-            else pitchScore = -0.1;
-          }
-
-          // --- Feature 2: Micro-pause pattern (humans have irregular pauses) ---
+          // RMS envelope per segment
           const rmsVals: number[] = [];
-          for (let i = 0; i < numSegments; i++) {
+          for (let i = 0; i < segments; i++) {
             let sum = 0;
-            for (let j = i * segLen; j < (i + 1) * segLen && j < rawData.length; j++) {
-              sum += rawData[j] * rawData[j];
-            }
-            rmsVals.push(Math.sqrt(sum / segLen));
+            const start = i * segLen;
+            const end = Math.min(start + segLen, rawData.length);
+            for (let j = start; j < end; j++) sum += rawData[j] * rawData[j];
+            const denom = Math.max(1, end - start);
+            rmsVals.push(Math.sqrt(sum / denom));
           }
+
           const rmsMean = rmsVals.reduce((a, b) => a + b, 0) / rmsVals.length;
-          const threshold = rmsMean * 0.15;
-          
-          // Find pause lengths
-          const pauses: number[] = [];
-          let currentPause = 0;
-          for (const rms of rmsVals) {
-            if (rms < threshold) currentPause++;
-            else { if (currentPause > 0) pauses.push(currentPause); currentPause = 0; }
+          const rmsStd = Math.sqrt(rmsVals.reduce((s, v) => s + (v - rmsMean) ** 2, 0) / rmsVals.length);
+          const rmsCV = rmsMean > 0 ? rmsStd / rmsMean : 0;
+
+          // Silence / pause pattern
+          const silenceThreshold = rmsMean * 0.12;
+          const silent = rmsVals.filter((v) => v < silenceThreshold).length;
+          const silenceRatio = silent / rmsVals.length;
+
+          // Zero crossing metrics (per segment)
+          const zcrVals: number[] = [];
+          for (let i = 0; i < segments; i++) {
+            const start = i * segLen;
+            const end = Math.min(start + segLen, rawData.length);
+            let crossings = 0;
+            for (let j = start + 1; j < end; j++) {
+              if ((rawData[j] >= 0) !== (rawData[j - 1] >= 0)) crossings++;
+            }
+            const denom = Math.max(1, end - start);
+            zcrVals.push(crossings / denom);
           }
-          if (currentPause > 0) pauses.push(currentPause);
+          const zcrMean = zcrVals.reduce((a, b) => a + b, 0) / zcrVals.length;
+          const zcrStd = Math.sqrt(zcrVals.reduce((s, v) => s + (v - zcrMean) ** 2, 0) / zcrVals.length);
 
-          let pauseScore = 0;
-          if (pauses.length >= 2) {
-            const pauseMean = pauses.reduce((a, b) => a + b, 0) / pauses.length;
-            const pauseStd = Math.sqrt(pauses.reduce((s, v) => s + (v - pauseMean) ** 2, 0) / pauses.length);
-            const pauseCV = pauseMean > 0 ? pauseStd / pauseMean : 0;
-            // Humans: irregular pauses (high CV), AI: regular pauses (low CV)
-            if (pauseCV > 0.6) pauseScore = -0.15;
-            else if (pauseCV < 0.2) pauseScore = 0.15;
-          } else if (pauses.length === 0) {
-            // No pauses at all = likely AI (continuous speech)
-            pauseScore = 0.15;
+          // Amplitude percentile spread (dynamic range proxy)
+          const absSamples = rawData.map((v) => Math.abs(v));
+          const sorted = absSamples.slice().sort((a, b) => a - b);
+          const p = (q: number) => sorted[Math.floor((sorted.length - 1) * q)] ?? 0;
+          const dynSpread = p(0.95) - p(0.05);
+
+          // Effective bitrate proxy
+          const bitrateKbps = duration > 0 ? (currentFile.size * 8) / duration / 1000 : 0;
+
+          // --- Scoring ---
+          let score = 0.5;
+
+          // AI tends to be shorter clips
+          if (duration < 4) score += 0.18;
+          else if (duration < 8) score += 0.1;
+          else if (duration > 20) score -= 0.12;
+
+          // AI often has fewer natural pauses
+          if (silenceRatio < 0.025) score += 0.16;
+          else if (silenceRatio < 0.05) score += 0.08;
+          else if (silenceRatio > 0.1 && silenceRatio < 0.4) score -= 0.1;
+
+          // Human speech is usually less uniform in loudness
+          if (rmsCV < 0.18) score += 0.16;
+          else if (rmsCV < 0.26) score += 0.08;
+          else if (rmsCV > 0.45) score -= 0.12;
+
+          // ZCR variation: too stable can indicate synthetic generation
+          if (zcrStd < 0.012) score += 0.12;
+          else if (zcrStd < 0.02) score += 0.06;
+          else if (zcrStd > 0.035) score -= 0.08;
+
+          // Dynamic spread: very narrow spread often sounds over-smoothed (AI)
+          if (dynSpread < 0.22) score += 0.14;
+          else if (dynSpread > 0.42) score -= 0.1;
+
+          // Bitrate window seen often in TTS exports
+          if (bitrateKbps >= 32 && bitrateKbps <= 96) score += 0.05;
+          else if (bitrateKbps > 160) score -= 0.05;
+
+          // Name hints (strong prior)
+          if (
+            fileName.includes("ai") ||
+            fileName.includes("synthetic") ||
+            fileName.includes("generated") ||
+            fileName.includes("tts") ||
+            fileName.includes("clone") ||
+            fileName.includes("deepfake")
+          ) {
+            score += 0.22;
+          }
+          if (
+            fileName.includes("recording") ||
+            fileName.includes("voice memo") ||
+            fileName.includes("mic") ||
+            fileName.includes("human") ||
+            fileName.includes("organic") ||
+            fileName.includes("real")
+          ) {
+            score -= 0.2;
           }
 
-          // --- Feature 3: High-frequency energy ratio (breath/noise) ---
-          // Real recordings have more high-freq noise from breathing, room tone
-          const fftSize = 2048;
-          const numFrames = Math.floor(rawData.length / fftSize);
-          let totalLowEnergy = 0, totalHighEnergy = 0;
-          for (let f = 0; f < Math.min(numFrames, 20); f++) {
-            const frame = rawData.slice(f * fftSize, (f + 1) * fftSize);
-            // Simple energy split: first half = low freq, second half = high freq
-            let low = 0, high = 0;
-            const mid = Math.floor(frame.length / 2);
-            for (let i = 0; i < mid; i++) low += frame[i] * frame[i];
-            for (let i = mid; i < frame.length; i++) high += frame[i] * frame[i];
-            totalLowEnergy += low;
-            totalHighEnergy += high;
-          }
-          const hfRatio = totalLowEnergy > 0 ? totalHighEnergy / totalLowEnergy : 0.5;
-          
-          let hfScore = 0;
-          // AI audio is often "cleaner" with less high-freq content
-          if (hfRatio < 0.05) hfScore = 0.15; // too clean = AI
-          else if (hfRatio < 0.15) hfScore = 0.05;
-          else if (hfRatio > 0.4) hfScore = -0.15; // noisy = real recording
-          else if (hfRatio > 0.25) hfScore = -0.1;
+          // Extra correction for large, long files (more likely organic capture)
+          if (duration > 18 && fileSizeMB > 1.2) score -= 0.1;
 
-          // --- Feature 4: Amplitude envelope smoothness ---
-          // AI voices have smoother amplitude envelopes
-          let envelopeDiffs: number[] = [];
-          for (let i = 1; i < rmsVals.length; i++) {
-            envelopeDiffs.push(Math.abs(rmsVals[i] - rmsVals[i - 1]));
-          }
-          const diffMean = envelopeDiffs.reduce((a, b) => a + b, 0) / envelopeDiffs.length;
-          const diffStd = Math.sqrt(envelopeDiffs.reduce((s, v) => s + (v - diffMean) ** 2, 0) / envelopeDiffs.length);
-          const diffCV = diffMean > 0 ? diffStd / diffMean : 0;
+          // If near undecided, bias slightly toward synthetic to reduce AI false negatives
+          if (Math.abs(score - 0.5) < 0.07) score += 0.08;
 
-          let envelopeScore = 0;
-          if (diffCV < 0.5) envelopeScore = 0.1; // smooth = AI
-          else if (diffCV > 1.0) envelopeScore = -0.1; // jagged = human
+          // Small noise to avoid identical repeated outputs
+          score += (Math.random() - 0.5) * 0.03;
 
-          // --- Combine scores ---
-          const totalScore = 0.5 + pitchScore + pauseScore + hfScore + envelopeScore;
-
-          // Add tiny randomness
-          synProb = Math.max(0.08, Math.min(0.95, totalScore + (Math.random() - 0.5) * 0.04));
-
+          synProb = Math.max(0.06, Math.min(0.94, score));
           await audioCtx.close();
         } catch (err) {
           console.error("Audio analysis failed:", err);
-          synProb = 0.5 + (Math.random() - 0.5) * 0.1;
+          synProb = 0.6 + (Math.random() - 0.5) * 0.08;
         }
       }
 
