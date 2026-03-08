@@ -73,6 +73,7 @@ const Index = () => {
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const streamRef = useRef<MediaStream | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
 
   const handleFileSelect = useCallback((file: File) => {
