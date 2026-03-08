@@ -208,7 +208,7 @@
   left: 0;
   width: 100%;
   height: 2px;
-  background: linear-gradient(90deg, transparent, hsl(174, 100%, 50%), transparent);
+  background: linear-gradient(90deg, transparent, hsl(152, 60%, 42%), transparent);
   opacity: 0.5;
   animation: scan-line 3s linear infinite;
 }
