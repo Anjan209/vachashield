@@ -83,8 +83,8 @@
 /* ===== GRID OVERLAY ===== */
 .grid-overlay {
   background-image:
-    linear-gradient(hsla(174, 100%, 50%, 0.03) 1px, transparent 1px),
-    linear-gradient(90deg, hsla(174, 100%, 50%, 0.03) 1px, transparent 1px);
+    linear-gradient(hsla(152, 60%, 42%, 0.03) 1px, transparent 1px),
+    linear-gradient(90deg, hsla(152, 60%, 42%, 0.03) 1px, transparent 1px);
   background-size: 60px 60px;
 }
 
