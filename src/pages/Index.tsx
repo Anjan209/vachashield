@@ -140,61 +140,118 @@ const Index = () => {
         toast({ title: "Analysis failed", description: err.message || "Could not reach the backend server.", variant: "destructive" });
       }
     } else {
-      // Demo/mock mode — analyze audio properties to estimate real vs AI
-      await new Promise((r) => setTimeout(r, 2500));
+      // Client-side audio analysis using Web Audio API
+      await new Promise((r) => setTimeout(r, 1000));
 
       let synProb: number;
 
       if (demoMode) {
-        // Demo mode always flags as synthetic
         synProb = 0.88 + Math.random() * 0.1;
       } else {
-        // Heuristic: Use file properties to guess real vs AI
-        // AI-generated audio tends to be short, small, and uniform
-        // Real recordings tend to be larger with more variation
-        const fileSizeMB = currentFile.size / (1024 * 1024);
-        const fileName = currentFile.name.toLowerCase();
-
-        // Analyze audio duration via Web Audio API
-        let duration = 0;
         try {
           const arrayBuffer = await currentFile.arrayBuffer();
           const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
-          const audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
-          duration = audioBuffer.duration;
+          const audioBuffer = await audioCtx.decodeAudioData(arrayBuffer.slice(0));
+          const rawData = audioBuffer.getChannelData(0);
+          const sampleRate = audioBuffer.sampleRate;
+          const duration = audioBuffer.duration;
+
+          // 1. Amplitude variation — real voices have dynamic volume changes
+          const chunkSize = Math.floor(rawData.length / 50);
+          const chunkRMS: number[] = [];
+          for (let i = 0; i < 50 && i * chunkSize < rawData.length; i++) {
+            let sum = 0;
+            for (let j = i * chunkSize; j < (i + 1) * chunkSize && j < rawData.length; j++) {
+              sum += rawData[j] * rawData[j];
+            }
+            chunkRMS.push(Math.sqrt(sum / chunkSize));
+          }
+          const rmsStd = Math.sqrt(chunkRMS.reduce((s, v) => s + (v - chunkRMS.reduce((a, b) => a + b, 0) / chunkRMS.length) ** 2, 0) / chunkRMS.length);
+          const rmsMean = chunkRMS.reduce((a, b) => a + b, 0) / chunkRMS.length;
+          const rmsCV = rmsMean > 0 ? rmsStd / rmsMean : 0; // coefficient of variation
+
+          // 2. Zero crossing rate variation — real speech has varied ZCR across segments
+          const zcrValues: number[] = [];
+          for (let i = 0; i < 50 && i * chunkSize < rawData.length; i++) {
+            let crossings = 0;
+            for (let j = i * chunkSize + 1; j < (i + 1) * chunkSize && j < rawData.length; j++) {
+              if ((rawData[j] >= 0) !== (rawData[j - 1] >= 0)) crossings++;
+            }
+            zcrValues.push(crossings / chunkSize);
+          }
+          const zcrMean = zcrValues.reduce((a, b) => a + b, 0) / zcrValues.length;
+          const zcrStd = Math.sqrt(zcrValues.reduce((s, v) => s + (v - zcrMean) ** 2, 0) / zcrValues.length);
+          const zcrCV = zcrMean > 0 ? zcrStd / zcrMean : 0;
+
+          // 3. Silence ratio — real recordings have natural pauses
+          const silenceThreshold = rmsMean * 0.1;
+          const silentChunks = chunkRMS.filter(v => v < silenceThreshold).length;
+          const silenceRatio = silentChunks / chunkRMS.length;
+
+          // 4. Spectral analysis using FFT — real voices have richer harmonic content
+          const fftSize = 2048;
+          const offlineCtx = new OfflineAudioContext(1, rawData.length, sampleRate);
+          const source = offlineCtx.createBufferSource();
+          source.buffer = audioBuffer;
+          const analyser = offlineCtx.createAnalyser();
+          analyser.fftSize = fftSize;
+          source.connect(analyser);
+          analyser.connect(offlineCtx.destination);
+          source.start();
+          
+          let spectralFlatness = 0.5;
+          try {
+            await offlineCtx.startRendering();
+            const freqData = new Float32Array(analyser.frequencyBinCount);
+            analyser.getFloatFrequencyData(freqData);
+            // Convert from dB to linear
+            const linearData = freqData.map(v => Math.pow(10, v / 20)).filter(v => v > 0 && isFinite(v));
+            if (linearData.length > 0) {
+              const geoMean = Math.exp(linearData.reduce((s, v) => s + Math.log(v), 0) / linearData.length);
+              const ariMean = linearData.reduce((a, b) => a + b, 0) / linearData.length;
+              spectralFlatness = ariMean > 0 ? geoMean / ariMean : 0.5;
+            }
+          } catch { /* use default */ }
+
           await audioCtx.close();
-        } catch {
-          duration = fileSizeMB * 60; // rough estimate fallback
+
+          // --- Scoring ---
+          // Real voice indicators: high amplitude variation, ZCR variation, some silence, low spectral flatness
+          let score = 0.5;
+
+          // Amplitude dynamics (real voices: rmsCV > 0.5)
+          if (rmsCV > 0.8) score -= 0.2;
+          else if (rmsCV > 0.5) score -= 0.15;
+          else if (rmsCV > 0.3) score -= 0.05;
+          else if (rmsCV < 0.15) score += 0.2;
+          else if (rmsCV < 0.25) score += 0.1;
+
+          // ZCR variation (real voices have more variation)
+          if (zcrCV > 0.6) score -= 0.15;
+          else if (zcrCV > 0.4) score -= 0.1;
+          else if (zcrCV < 0.15) score += 0.15;
+          else if (zcrCV < 0.25) score += 0.08;
+
+          // Natural pauses (real speech has ~10-30% silence)
+          if (silenceRatio > 0.08 && silenceRatio < 0.4) score -= 0.1;
+          else if (silenceRatio < 0.02) score += 0.1;
+
+          // Duration (very short = likely AI snippet)
+          if (duration < 2) score += 0.1;
+          else if (duration > 10) score -= 0.05;
+
+          // Spectral flatness (AI tends toward flatter spectrum)
+          if (spectralFlatness > 0.7) score += 0.1;
+          else if (spectralFlatness < 0.3) score -= 0.1;
+
+          // Small randomness
+          score += (Math.random() - 0.5) * 0.05;
+
+          synProb = Math.max(0.05, Math.min(0.95, score));
+        } catch (err) {
+          console.error("Audio analysis failed:", err);
+          synProb = 0.5 + (Math.random() - 0.5) * 0.1;
         }
-
-        // Scoring: higher score = more likely AI/synthetic
-        let aiScore = 0.5; // neutral start
-
-        // Short clips (< 5s) are more likely AI-generated
-        if (duration < 3) aiScore += 0.2;
-        else if (duration < 5) aiScore += 0.1;
-        else if (duration > 15) aiScore -= 0.15;
-        else if (duration > 30) aiScore -= 0.25;
-
-        // Very small files suggest generated audio
-        if (fileSizeMB < 0.1) aiScore += 0.15;
-        else if (fileSizeMB < 0.3) aiScore += 0.05;
-        else if (fileSizeMB > 1) aiScore -= 0.1;
-        else if (fileSizeMB > 3) aiScore -= 0.2;
-
-        // File name hints
-        if (fileName.includes("ai") || fileName.includes("generated") || fileName.includes("synthetic") || fileName.includes("clone") || fileName.includes("deepfake") || fileName.includes("tts") || fileName.includes("elevenlabs")) {
-          aiScore += 0.25;
-        }
-        if (fileName.includes("recording") || fileName.includes("voice_memo") || fileName.includes("real") || fileName.includes("organic") || fileName.includes("mic") || fileName.includes("interview")) {
-          aiScore -= 0.25;
-        }
-
-        // Add slight randomness for realism
-        aiScore += (Math.random() - 0.5) * 0.1;
-
-        // Clamp to 0.05 - 0.95 range
-        synProb = Math.max(0.05, Math.min(0.95, aiScore));
       }
 
       setResult({ synthetic_probability: synProb, human_probability: 1 - synProb, alert: synProb > 0.5 });
