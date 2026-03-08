@@ -119,16 +119,36 @@ const Index = () => {
     mediaRecorderRef.current = null;
   }, []);
 
+  const BACKEND_URL = ""; // TODO: Set your deployed Flask backend URL here, e.g. "https://your-app.onrender.com"
+
   const analyzeFile = useCallback(async () => {
     if (!currentFile) return;
     setIsLoading(true);
     setResult(null);
-    await new Promise((r) => setTimeout(r, 2500));
-    const synProb = demoMode ? 0.92 + Math.random() * 0.07 : Math.random() * 0.28;
-    setResult({ synthetic_probability: synProb, human_probability: 1 - synProb, alert: synProb > 0.5 });
+
+    if (BACKEND_URL) {
+      // Real backend call
+      try {
+        const formData = new FormData();
+        formData.append("file", currentFile);
+        const response = await fetch(`${BACKEND_URL}/predict`, { method: "POST", body: formData });
+        if (!response.ok) throw new Error(`Server error: ${response.status}`);
+        const data = await response.json();
+        const synProb = data.synthetic_probability ?? data.fake_probability ?? data.probability ?? 0;
+        setResult({ synthetic_probability: synProb, human_probability: 1 - synProb, alert: synProb > 0.5 });
+      } catch (err: any) {
+        toast({ title: "Analysis failed", description: err.message || "Could not reach the backend server.", variant: "destructive" });
+      }
+    } else {
+      // Demo/mock mode — realistic random detection
+      await new Promise((r) => setTimeout(r, 2500));
+      const synProb = demoMode ? 0.88 + Math.random() * 0.1 : 0.3 + Math.random() * 0.5; // 30-80% range so it can go either way
+      setResult({ synthetic_probability: synProb, human_probability: 1 - synProb, alert: synProb > 0.5 });
+    }
+
     setIsLoading(false);
     setShowFeedbackThanks(false);
-  }, [currentFile, demoMode]);
+  }, [currentFile, demoMode, toast]);
 
   const resetUI = useCallback(() => {
     setCurrentFile(null);
