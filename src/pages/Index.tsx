@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback } from "react";
+import { useState, useRef, useCallback, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { Upload, RotateCcw, Download, ShieldCheck, AlertTriangle, Mic, MicOff, Shield, Zap, Waves } from "lucide-react";
 import { Button } from "@/components/ui/button";
