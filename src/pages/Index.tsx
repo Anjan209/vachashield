@@ -271,7 +271,7 @@ const Index = () => {
         <motion.div initial={{ opacity: 0, y: 30 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.8, ease: [0.16, 1, 0.3, 1] }} className="text-center mb-16">
           <div className="inline-flex items-center gap-2 glass rounded-full px-4 py-1.5 mb-6 text-xs font-mono text-primary">
             <Zap className="w-3 h-3" />
-            Powered by PyTorch AudioCNN • Dual-Channel PCEN Analysis
+            Powered by Lovable AI • Gemini Audio Forensics Engine
           </div>
           <AnimatedHeadline />
           <p className="text-muted-foreground text-lg max-w-xl mx-auto leading-relaxed">
