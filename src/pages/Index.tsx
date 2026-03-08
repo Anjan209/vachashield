@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback } from "react";
+import { useState, useRef, useCallback, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { Upload, RotateCcw, Download, ShieldCheck, AlertTriangle, Mic, MicOff, Shield, Zap, Waves } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -48,6 +48,41 @@ const StatCard = ({ icon: Icon, label, value, color }: { icon: any; label: strin
     </div>
   </div>
 );
+
+const heroWords = ["Deepfakes", "Cloned Voices", "Synthetic Speech", "AI Impostors", "Fake Audio"];
+
+const AnimatedHeadline = () => {
+  const [wordIndex, setWordIndex] = useState(0);
+
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setWordIndex((prev) => (prev + 1) % heroWords.length);
+    }, 2800);
+    return () => clearInterval(interval);
+  }, []);
+
+  return (
+    <h1 className="font-display text-6xl md:text-7xl font-extrabold tracking-tight mb-4 leading-[0.95]">
+      <span className="text-foreground">Expose</span>
+      <br />
+      <span className="relative inline-block h-[1.1em] overflow-hidden align-bottom">
+        <AnimatePresence mode="wait">
+          <motion.span
+            key={heroWords[wordIndex]}
+            initial={{ y: 60, opacity: 0, rotateX: -40 }}
+            animate={{ y: 0, opacity: 1, rotateX: 0 }}
+            exit={{ y: -60, opacity: 0, rotateX: 40 }}
+            transition={{ duration: 0.5, ease: [0.16, 1, 0.3, 1] }}
+            className="absolute left-0 bg-gradient-to-r from-primary via-secondary to-primary bg-clip-text text-transparent whitespace-nowrap"
+            style={{ backgroundSize: "200% auto", animation: "aurora 6s ease infinite" }}
+          >
+            {heroWords[wordIndex]}
+          </motion.span>
+        </AnimatePresence>
+      </span>
+    </h1>
+  );
+};
 
 const Index = () => {
   const { toast } = useToast();
@@ -152,13 +187,7 @@ const Index = () => {
             <Zap className="w-3 h-3" />
             Powered by PyTorch AudioCNN • Dual-Channel PCEN Analysis
           </div>
-          <h1 className="font-display text-6xl md:text-7xl font-extrabold tracking-tight mb-4 leading-[0.95]">
-            <span className="bg-gradient-to-r from-primary via-secondary to-primary bg-clip-text text-transparent" style={{ backgroundSize: "200% auto", animation: "aurora 6s ease infinite" }}>
-              Detect Voice
-            </span>
-            <br />
-            <span className="text-foreground">Deepfakes</span>
-          </h1>
+          <AnimatedHeadline />
           <p className="text-muted-foreground text-lg max-w-xl mx-auto leading-relaxed">
             Upload any audio signature or scan live — our neural network will analyze mel-spectrograms for synthetic speech artifacts.
           </p>
