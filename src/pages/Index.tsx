@@ -49,7 +49,7 @@ const StatCard = ({ icon: Icon, label, value, color }: { icon: any; label: strin
   </div>
 );
 
-const heroWords = ["Deepfakes", "Cloned Voices", "Synthetic Speech", "AI Impostors", "Fake Audio"];
+const heroWords = ["Unmasked.", "Neutralized.", "Silenced.", "Destroyed.", "Caught."];
 
 const AnimatedHeadline = () => {
   const [wordIndex, setWordIndex] = useState(0);
@@ -63,7 +63,7 @@ const AnimatedHeadline = () => {
 
   return (
     <h1 className="font-display text-6xl md:text-7xl font-extrabold tracking-tight mb-4 leading-[0.95]">
-      <span className="text-foreground">Expose</span>
+      <span className="text-foreground">Every Fake Voice,</span>
       <br />
       <span className="relative inline-block h-[1.1em] overflow-hidden align-bottom">
         <AnimatePresence mode="wait">
