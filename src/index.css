@@ -111,7 +111,7 @@
   transition: all 0.4s cubic-bezier(0.16, 1, 0.3, 1);
 }
 .glass-hover:hover {
-  border-color: hsla(174, 100%, 50%, 0.15);
+  border-color: hsla(152, 60%, 42%, 0.18);
   box-shadow: var(--glow-primary);
 }
 
