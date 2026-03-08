@@ -140,9 +140,63 @@ const Index = () => {
         toast({ title: "Analysis failed", description: err.message || "Could not reach the backend server.", variant: "destructive" });
       }
     } else {
-      // Demo/mock mode — realistic random detection
+      // Demo/mock mode — analyze audio properties to estimate real vs AI
       await new Promise((r) => setTimeout(r, 2500));
-      const synProb = demoMode ? 0.88 + Math.random() * 0.1 : 0.7 + Math.random() * 0.3; // 70-100% range
+
+      let synProb: number;
+
+      if (demoMode) {
+        // Demo mode always flags as synthetic
+        synProb = 0.88 + Math.random() * 0.1;
+      } else {
+        // Heuristic: Use file properties to guess real vs AI
+        // AI-generated audio tends to be short, small, and uniform
+        // Real recordings tend to be larger with more variation
+        const fileSizeMB = currentFile.size / (1024 * 1024);
+        const fileName = currentFile.name.toLowerCase();
+
+        // Analyze audio duration via Web Audio API
+        let duration = 0;
+        try {
+          const arrayBuffer = await currentFile.arrayBuffer();
+          const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
+          const audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
+          duration = audioBuffer.duration;
+          await audioCtx.close();
+        } catch {
+          duration = fileSizeMB * 60; // rough estimate fallback
+        }
+
+        // Scoring: higher score = more likely AI/synthetic
+        let aiScore = 0.5; // neutral start
+
+        // Short clips (< 5s) are more likely AI-generated
+        if (duration < 3) aiScore += 0.2;
+        else if (duration < 5) aiScore += 0.1;
+        else if (duration > 15) aiScore -= 0.15;
+        else if (duration > 30) aiScore -= 0.25;
+
+        // Very small files suggest generated audio
+        if (fileSizeMB < 0.1) aiScore += 0.15;
+        else if (fileSizeMB < 0.3) aiScore += 0.05;
+        else if (fileSizeMB > 1) aiScore -= 0.1;
+        else if (fileSizeMB > 3) aiScore -= 0.2;
+
+        // File name hints
+        if (fileName.includes("ai") || fileName.includes("generated") || fileName.includes("synthetic") || fileName.includes("clone") || fileName.includes("deepfake") || fileName.includes("tts") || fileName.includes("elevenlabs")) {
+          aiScore += 0.25;
+        }
+        if (fileName.includes("recording") || fileName.includes("voice_memo") || fileName.includes("real") || fileName.includes("organic") || fileName.includes("mic") || fileName.includes("interview")) {
+          aiScore -= 0.25;
+        }
+
+        // Add slight randomness for realism
+        aiScore += (Math.random() - 0.5) * 0.1;
+
+        // Clamp to 0.05 - 0.95 range
+        synProb = Math.max(0.05, Math.min(0.95, aiScore));
+      }
+
       setResult({ synthetic_probability: synProb, human_probability: 1 - synProb, alert: synProb > 0.5 });
     }
 
