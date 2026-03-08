@@ -220,7 +220,7 @@ const Index = () => {
                   {/* Live Mic */}
                   <div className="flex flex-col items-center justify-center text-center border-2 border-dashed border-border rounded-2xl p-8 min-h-[280px] relative overflow-hidden">
                     {isRecording && (
-                      <div className="absolute inset-0 rounded-2xl" style={{ background: "radial-gradient(circle at center, hsla(0,90%,55%,0.05) 0%, transparent 70%)" }} />
+                      <div className="absolute inset-0 rounded-2xl pointer-events-none" style={{ background: "radial-gradient(circle at center, hsla(0,90%,55%,0.05) 0%, transparent 70%)" }} />
                     )}
                     <div className={`w-16 h-16 rounded-2xl flex items-center justify-center mb-5 transition-all ${isRecording ? "bg-destructive/20 scale-110" : "bg-primary/10"}`}>
                       {isRecording ? <MicOff className="w-7 h-7 text-destructive" /> : <Mic className="w-7 h-7 text-primary" />}
