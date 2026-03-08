@@ -482,19 +482,42 @@ const Index = () => {
                     </div>
                   </div>
 
-                  {/* Spectrogram Placeholder */}
+                  {/* AI Reasoning Panel */}
                   <div>
-                    <p className="text-xs text-muted-foreground font-mono uppercase tracking-wider mb-3">Acoustic Feature Map</p>
-                    <div className="h-[200px] rounded-2xl bg-muted/50 border border-border flex items-center justify-center relative overflow-hidden">
-                      <div className="absolute inset-0 scan-line opacity-20" />
-                      <div className="text-center relative z-10">
-                        <Waves className="w-8 h-8 text-muted-foreground/40 mx-auto mb-2" />
-                        <p className="text-xs text-muted-foreground font-mono">Mel-Spectrogram</p>
-                        <p className="text-[10px] text-muted-foreground/60 font-mono">Connect backend for live rendering</p>
-                      </div>
+                    <p className="text-xs text-muted-foreground font-mono uppercase tracking-wider mb-3">AI Analysis Reasoning</p>
+                    <div className="rounded-2xl bg-muted/50 border border-border p-5 relative overflow-hidden">
+                      {result.confidence && (
+                        <div className="flex items-center gap-2 mb-3">
+                          <span className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground">Confidence:</span>
+                          <span className={`text-xs font-mono font-bold uppercase ${
+                            result.confidence === "high" ? "text-safe" : result.confidence === "medium" ? "text-warning" : "text-destructive"
+                          }`}>{result.confidence}</span>
+                        </div>
+                      )}
+                      {result.reasoning && (
+                        <p className="text-sm text-foreground/80 leading-relaxed mb-4">{result.reasoning}</p>
+                      )}
+                      {result.key_indicators && result.key_indicators.length > 0 && (
+                        <div>
+                          <p className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground mb-2">Key Indicators</p>
+                          <div className="flex flex-wrap gap-2">
+                            {result.key_indicators.map((indicator, i) => (
+                              <span key={i} className="text-xs font-mono px-2.5 py-1 rounded-lg bg-primary/10 text-primary border border-primary/20">
+                                {indicator}
+                              </span>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                      {!result.reasoning && (
+                        <div className="text-center py-4">
+                          <Waves className="w-8 h-8 text-muted-foreground/40 mx-auto mb-2" />
+                          <p className="text-xs text-muted-foreground font-mono">Analysis details unavailable</p>
+                        </div>
+                      )}
                     </div>
                     <p className="text-[10px] text-muted-foreground/60 mt-2 font-mono italic">
-                      * 16kHz Mel-Spectrograms → PyTorch AudioCNN dual-channel PCEN pipeline
+                      * Powered by Lovable AI • Gemini audio forensics analysis
                     </p>
                   </div>
                 </div>
