@@ -72,7 +72,7 @@ const Index = () => {
   const [result, setResult] = useState<AnalysisResult | null>(null);
   const [isDragOver, setIsDragOver] = useState(false);
   const [isRecording, setIsRecording] = useState(false);
-  const [demoMode, setDemoMode] = useState(false);
+  
   const [showFeedbackThanks, setShowFeedbackThanks] = useState(false);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
