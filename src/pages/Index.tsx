@@ -73,6 +73,7 @@ const Index = () => {
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const streamRef = useRef<MediaStream | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
 
   const handleFileSelect = useCallback((file: File) => {
@@ -89,29 +90,34 @@ const Index = () => {
     if (e.dataTransfer.files.length) handleFileSelect(e.dataTransfer.files[0]);
   }, [handleFileSelect]);
 
-  const toggleRecording = useCallback(async () => {
-    if (!isRecording) {
-      try {
-        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-        const recorder = new MediaRecorder(stream);
-        audioChunksRef.current = [];
-        recorder.ondataavailable = (e) => { if (e.data.size > 0) audioChunksRef.current.push(e.data); };
-        recorder.onstop = () => {
-          const blob = new Blob(audioChunksRef.current, { type: "audio/webm" });
-          stream.getTracks().forEach((t) => t.stop());
-          setCurrentFile(new File([blob], "live_scan.webm", { type: "audio/webm" }));
-          setIsRecording(false);
-        };
-        mediaRecorderRef.current = recorder;
-        recorder.start(100);
-        setIsRecording(true);
-      } catch {
-        toast({ title: "Microphone blocked", description: "Grant microphone permissions to continue.", variant: "destructive" });
-      }
-    } else {
-      mediaRecorderRef.current?.stop();
+  const startRecording = useCallback(async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } });
+      streamRef.current = stream;
+      const recorder = new MediaRecorder(stream);
+      audioChunksRef.current = [];
+      recorder.ondataavailable = (e) => { if (e.data.size > 0) audioChunksRef.current.push(e.data); };
+      recorder.onstop = () => {
+        const blob = new Blob(audioChunksRef.current, { type: "audio/webm" });
+        streamRef.current?.getTracks().forEach((t) => t.stop());
+        streamRef.current = null;
+        setCurrentFile(new File([blob], "live_scan.webm", { type: "audio/webm" }));
+        setIsRecording(false);
+      };
+      mediaRecorderRef.current = recorder;
+      recorder.start(100);
+      setIsRecording(true);
+    } catch {
+      toast({ title: "Microphone blocked", description: "Grant microphone permissions to continue.", variant: "destructive" });
     }
-  }, [isRecording, toast]);
+  }, [toast]);
+
+  const stopRecording = useCallback(() => {
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== "inactive") {
+      mediaRecorderRef.current.stop();
+    }
+    mediaRecorderRef.current = null;
+  }, []);
 
   const analyzeFile = useCallback(async () => {
     if (!currentFile) return;
@@ -232,7 +238,7 @@ const Index = () => {
                     )}
 
                     <Button
-                      onClick={toggleRecording}
+                      onClick={isRecording ? stopRecording : startRecording}
                       size="sm"
                       className={`font-mono text-xs ${isRecording ? "bg-destructive hover:bg-destructive/80" : "bg-gradient-to-r from-primary to-secondary text-primary-foreground"}`}
                     >
