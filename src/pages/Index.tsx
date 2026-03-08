@@ -187,13 +187,7 @@ const Index = () => {
             <Zap className="w-3 h-3" />
             Powered by PyTorch AudioCNN • Dual-Channel PCEN Analysis
           </div>
-          <h1 className="font-display text-6xl md:text-7xl font-extrabold tracking-tight mb-4 leading-[0.95]">
-            <span className="bg-gradient-to-r from-primary via-secondary to-primary bg-clip-text text-transparent" style={{ backgroundSize: "200% auto", animation: "aurora 6s ease infinite" }}>
-              Detect Voice
-            </span>
-            <br />
-            <span className="text-foreground">Deepfakes</span>
-          </h1>
+          <AnimatedHeadline />
           <p className="text-muted-foreground text-lg max-w-xl mx-auto leading-relaxed">
             Upload any audio signature or scan live — our neural network will analyze mel-spectrograms for synthetic speech artifacts.
           </p>
