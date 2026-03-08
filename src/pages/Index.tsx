@@ -238,7 +238,7 @@ const Index = () => {
                     )}
 
                     <Button
-                      onClick={toggleRecording}
+                      onClick={isRecording ? stopRecording : startRecording}
                       size="sm"
                       className={`font-mono text-xs ${isRecording ? "bg-destructive hover:bg-destructive/80" : "bg-gradient-to-r from-primary to-secondary text-primary-foreground"}`}
                     >
