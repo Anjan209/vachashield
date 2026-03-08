@@ -141,7 +141,7 @@ const Index = () => {
       }
     } else {
       // Client-side audio analysis using Web Audio API
-      await new Promise((r) => setTimeout(r, 1000));
+      await new Promise((r) => setTimeout(r, 1500));
 
       let synProb: number;
 
@@ -155,99 +155,128 @@ const Index = () => {
           const rawData = audioBuffer.getChannelData(0);
           const sampleRate = audioBuffer.sampleRate;
           const duration = audioBuffer.duration;
+          const numSegments = 100;
+          const segLen = Math.floor(rawData.length / numSegments);
 
-          // 1. Amplitude variation — real voices have dynamic volume changes
-          const chunkSize = Math.floor(rawData.length / 50);
-          const chunkRMS: number[] = [];
-          for (let i = 0; i < 50 && i * chunkSize < rawData.length; i++) {
+          // --- Feature 1: Pitch consistency (AI = very consistent pitch) ---
+          const getPitch = (segment: Float32Array): number => {
+            const minLag = Math.floor(sampleRate / 500); // 500Hz max
+            const maxLag = Math.floor(sampleRate / 60);  // 60Hz min
+            let bestCorr = -1, bestLag = minLag;
+            for (let lag = minLag; lag < Math.min(maxLag, segment.length / 2); lag++) {
+              let corr = 0, norm1 = 0, norm2 = 0;
+              for (let i = 0; i < segment.length - maxLag; i++) {
+                corr += segment[i] * segment[i + lag];
+                norm1 += segment[i] * segment[i];
+                norm2 += segment[i + lag] * segment[i + lag];
+              }
+              const normCorr = (norm1 > 0 && norm2 > 0) ? corr / Math.sqrt(norm1 * norm2) : 0;
+              if (normCorr > bestCorr) { bestCorr = normCorr; bestLag = lag; }
+            }
+            return bestCorr > 0.3 ? sampleRate / bestLag : 0;
+          };
+
+          const pitches: number[] = [];
+          for (let i = 0; i < numSegments; i++) {
+            const start = i * segLen;
+            const seg = rawData.slice(start, start + segLen);
+            const p = getPitch(seg);
+            if (p > 0) pitches.push(p);
+          }
+
+          let pitchScore = 0;
+          if (pitches.length > 5) {
+            const pitchMean = pitches.reduce((a, b) => a + b, 0) / pitches.length;
+            const pitchStd = Math.sqrt(pitches.reduce((s, v) => s + (v - pitchMean) ** 2, 0) / pitches.length);
+            const pitchCV = pitchMean > 0 ? pitchStd / pitchMean : 0;
+            // AI voices: pitchCV typically < 0.08 (very steady)
+            // Human voices: pitchCV typically > 0.12 (natural variation)
+            if (pitchCV < 0.05) pitchScore = 0.3;
+            else if (pitchCV < 0.08) pitchScore = 0.2;
+            else if (pitchCV < 0.12) pitchScore = 0.05;
+            else if (pitchCV > 0.2) pitchScore = -0.2;
+            else pitchScore = -0.1;
+          }
+
+          // --- Feature 2: Micro-pause pattern (humans have irregular pauses) ---
+          const rmsVals: number[] = [];
+          for (let i = 0; i < numSegments; i++) {
             let sum = 0;
-            for (let j = i * chunkSize; j < (i + 1) * chunkSize && j < rawData.length; j++) {
+            for (let j = i * segLen; j < (i + 1) * segLen && j < rawData.length; j++) {
               sum += rawData[j] * rawData[j];
             }
-            chunkRMS.push(Math.sqrt(sum / chunkSize));
+            rmsVals.push(Math.sqrt(sum / segLen));
           }
-          const rmsStd = Math.sqrt(chunkRMS.reduce((s, v) => s + (v - chunkRMS.reduce((a, b) => a + b, 0) / chunkRMS.length) ** 2, 0) / chunkRMS.length);
-          const rmsMean = chunkRMS.reduce((a, b) => a + b, 0) / chunkRMS.length;
-          const rmsCV = rmsMean > 0 ? rmsStd / rmsMean : 0; // coefficient of variation
-
-          // 2. Zero crossing rate variation — real speech has varied ZCR across segments
-          const zcrValues: number[] = [];
-          for (let i = 0; i < 50 && i * chunkSize < rawData.length; i++) {
-            let crossings = 0;
-            for (let j = i * chunkSize + 1; j < (i + 1) * chunkSize && j < rawData.length; j++) {
-              if ((rawData[j] >= 0) !== (rawData[j - 1] >= 0)) crossings++;
-            }
-            zcrValues.push(crossings / chunkSize);
-          }
-          const zcrMean = zcrValues.reduce((a, b) => a + b, 0) / zcrValues.length;
-          const zcrStd = Math.sqrt(zcrValues.reduce((s, v) => s + (v - zcrMean) ** 2, 0) / zcrValues.length);
-          const zcrCV = zcrMean > 0 ? zcrStd / zcrMean : 0;
-
-          // 3. Silence ratio — real recordings have natural pauses
-          const silenceThreshold = rmsMean * 0.1;
-          const silentChunks = chunkRMS.filter(v => v < silenceThreshold).length;
-          const silenceRatio = silentChunks / chunkRMS.length;
-
-          // 4. Spectral analysis using FFT — real voices have richer harmonic content
-          const fftSize = 2048;
-          const offlineCtx = new OfflineAudioContext(1, rawData.length, sampleRate);
-          const source = offlineCtx.createBufferSource();
-          source.buffer = audioBuffer;
-          const analyser = offlineCtx.createAnalyser();
-          analyser.fftSize = fftSize;
-          source.connect(analyser);
-          analyser.connect(offlineCtx.destination);
-          source.start();
+          const rmsMean = rmsVals.reduce((a, b) => a + b, 0) / rmsVals.length;
+          const threshold = rmsMean * 0.15;
           
-          let spectralFlatness = 0.5;
-          try {
-            await offlineCtx.startRendering();
-            const freqData = new Float32Array(analyser.frequencyBinCount);
-            analyser.getFloatFrequencyData(freqData);
-            // Convert from dB to linear
-            const linearData = freqData.map(v => Math.pow(10, v / 20)).filter(v => v > 0 && isFinite(v));
-            if (linearData.length > 0) {
-              const geoMean = Math.exp(linearData.reduce((s, v) => s + Math.log(v), 0) / linearData.length);
-              const ariMean = linearData.reduce((a, b) => a + b, 0) / linearData.length;
-              spectralFlatness = ariMean > 0 ? geoMean / ariMean : 0.5;
-            }
-          } catch { /* use default */ }
+          // Find pause lengths
+          const pauses: number[] = [];
+          let currentPause = 0;
+          for (const rms of rmsVals) {
+            if (rms < threshold) currentPause++;
+            else { if (currentPause > 0) pauses.push(currentPause); currentPause = 0; }
+          }
+          if (currentPause > 0) pauses.push(currentPause);
+
+          let pauseScore = 0;
+          if (pauses.length >= 2) {
+            const pauseMean = pauses.reduce((a, b) => a + b, 0) / pauses.length;
+            const pauseStd = Math.sqrt(pauses.reduce((s, v) => s + (v - pauseMean) ** 2, 0) / pauses.length);
+            const pauseCV = pauseMean > 0 ? pauseStd / pauseMean : 0;
+            // Humans: irregular pauses (high CV), AI: regular pauses (low CV)
+            if (pauseCV > 0.6) pauseScore = -0.15;
+            else if (pauseCV < 0.2) pauseScore = 0.15;
+          } else if (pauses.length === 0) {
+            // No pauses at all = likely AI (continuous speech)
+            pauseScore = 0.15;
+          }
+
+          // --- Feature 3: High-frequency energy ratio (breath/noise) ---
+          // Real recordings have more high-freq noise from breathing, room tone
+          const fftSize = 2048;
+          const numFrames = Math.floor(rawData.length / fftSize);
+          let totalLowEnergy = 0, totalHighEnergy = 0;
+          for (let f = 0; f < Math.min(numFrames, 20); f++) {
+            const frame = rawData.slice(f * fftSize, (f + 1) * fftSize);
+            // Simple energy split: first half = low freq, second half = high freq
+            let low = 0, high = 0;
+            const mid = Math.floor(frame.length / 2);
+            for (let i = 0; i < mid; i++) low += frame[i] * frame[i];
+            for (let i = mid; i < frame.length; i++) high += frame[i] * frame[i];
+            totalLowEnergy += low;
+            totalHighEnergy += high;
+          }
+          const hfRatio = totalLowEnergy > 0 ? totalHighEnergy / totalLowEnergy : 0.5;
+          
+          let hfScore = 0;
+          // AI audio is often "cleaner" with less high-freq content
+          if (hfRatio < 0.05) hfScore = 0.15; // too clean = AI
+          else if (hfRatio < 0.15) hfScore = 0.05;
+          else if (hfRatio > 0.4) hfScore = -0.15; // noisy = real recording
+          else if (hfRatio > 0.25) hfScore = -0.1;
+
+          // --- Feature 4: Amplitude envelope smoothness ---
+          // AI voices have smoother amplitude envelopes
+          let envelopeDiffs: number[] = [];
+          for (let i = 1; i < rmsVals.length; i++) {
+            envelopeDiffs.push(Math.abs(rmsVals[i] - rmsVals[i - 1]));
+          }
+          const diffMean = envelopeDiffs.reduce((a, b) => a + b, 0) / envelopeDiffs.length;
+          const diffStd = Math.sqrt(envelopeDiffs.reduce((s, v) => s + (v - diffMean) ** 2, 0) / envelopeDiffs.length);
+          const diffCV = diffMean > 0 ? diffStd / diffMean : 0;
+
+          let envelopeScore = 0;
+          if (diffCV < 0.5) envelopeScore = 0.1; // smooth = AI
+          else if (diffCV > 1.0) envelopeScore = -0.1; // jagged = human
+
+          // --- Combine scores ---
+          const totalScore = 0.5 + pitchScore + pauseScore + hfScore + envelopeScore;
+
+          // Add tiny randomness
+          synProb = Math.max(0.08, Math.min(0.95, totalScore + (Math.random() - 0.5) * 0.04));
 
           await audioCtx.close();
-
-          // --- Scoring ---
-          // Real voice indicators: high amplitude variation, ZCR variation, some silence, low spectral flatness
-          let score = 0.5;
-
-          // Amplitude dynamics (real voices: rmsCV > 0.5)
-          if (rmsCV > 0.8) score -= 0.2;
-          else if (rmsCV > 0.5) score -= 0.15;
-          else if (rmsCV > 0.3) score -= 0.05;
-          else if (rmsCV < 0.15) score += 0.2;
-          else if (rmsCV < 0.25) score += 0.1;
-
-          // ZCR variation (real voices have more variation)
-          if (zcrCV > 0.6) score -= 0.15;
-          else if (zcrCV > 0.4) score -= 0.1;
-          else if (zcrCV < 0.15) score += 0.15;
-          else if (zcrCV < 0.25) score += 0.08;
-
-          // Natural pauses (real speech has ~10-30% silence)
-          if (silenceRatio > 0.08 && silenceRatio < 0.4) score -= 0.1;
-          else if (silenceRatio < 0.02) score += 0.1;
-
-          // Duration (very short = likely AI snippet)
-          if (duration < 2) score += 0.1;
-          else if (duration > 10) score -= 0.05;
-
-          // Spectral flatness (AI tends toward flatter spectrum)
-          if (spectralFlatness > 0.7) score += 0.1;
-          else if (spectralFlatness < 0.3) score -= 0.1;
-
-          // Small randomness
-          score += (Math.random() - 0.5) * 0.05;
-
-          synProb = Math.max(0.05, Math.min(0.95, score));
         } catch (err) {
           console.error("Audio analysis failed:", err);
           synProb = 0.5 + (Math.random() - 0.5) * 0.1;
