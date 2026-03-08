@@ -377,11 +377,7 @@ const Index = () => {
                         ANALYZE SIGNATURES →
                       </Button>
                     </div>
-                    {/* Hidden demo toggle */}
-                    <label className="absolute bottom-3 right-5 opacity-20 hover:opacity-40 transition-opacity cursor-pointer text-[10px] font-mono flex items-center gap-1">
-                      <input type="checkbox" checked={demoMode} onChange={(e) => setDemoMode(e.target.checked)} className="w-3 h-3" />
-                      DEMO
-                    </label>
+                    
                   </motion.div>
                 )}
               </div>
