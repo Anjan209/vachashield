@@ -142,7 +142,7 @@ const Index = () => {
     } else {
       // Demo/mock mode — realistic random detection
       await new Promise((r) => setTimeout(r, 2500));
-      const synProb = demoMode ? 0.88 + Math.random() * 0.1 : 0.3 + Math.random() * 0.5; // 30-80% range so it can go either way
+      const synProb = demoMode ? 0.88 + Math.random() * 0.1 : 0.7 + Math.random() * 0.3; // 70-100% range
       setResult({ synthetic_probability: synProb, human_probability: 1 - synProb, alert: synProb > 0.5 });
     }
 
