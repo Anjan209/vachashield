@@ -174,9 +174,9 @@ const Index = () => {
       const zcrStd = Math.sqrt(zcrVals.reduce((s, v) => s + (v - zcrMean) ** 2, 0) / zcrVals.length);
 
       // Dynamic range
-      const absSamples = Array.from(rawData).map((v) => Math.abs(v));
+      const absSamples = Array.from(rawData).map((v: number) => Math.abs(v));
       const sorted = absSamples.sort((a, b) => a - b);
-      const p = (q: number) => sorted[Math.floor((sorted.length - 1) * q)] ?? 0;
+      const p = (q: number): number => sorted[Math.floor((sorted.length - 1) * q)] ?? 0;
       const dynSpread = p(0.95) - p(0.05);
 
       // Bitrate
