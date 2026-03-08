@@ -49,36 +49,13 @@ const StatCard = ({ icon: Icon, label, value, color }: { icon: any; label: strin
   </div>
 );
 
-const heroWords = ["Unmasked.", "Neutralized.", "Silenced.", "Destroyed.", "Caught."];
-
 const AnimatedHeadline = () => {
-  const [wordIndex, setWordIndex] = useState(0);
-
-  useEffect(() => {
-    const interval = setInterval(() => {
-      setWordIndex((prev) => (prev + 1) % heroWords.length);
-    }, 2800);
-    return () => clearInterval(interval);
-  }, []);
-
   return (
     <h1 className="font-display text-6xl md:text-7xl font-extrabold tracking-tight mb-4 leading-[0.95]">
-      <span className="text-foreground">Every Fake Voice,</span>
+      <span className="text-foreground">Trust Your</span>
       <br />
-      <span className="relative inline-block h-[1.1em] overflow-hidden align-bottom">
-        <AnimatePresence mode="wait">
-          <motion.span
-            key={heroWords[wordIndex]}
-            initial={{ y: 60, opacity: 0, rotateX: -40 }}
-            animate={{ y: 0, opacity: 1, rotateX: 0 }}
-            exit={{ y: -60, opacity: 0, rotateX: 40 }}
-            transition={{ duration: 0.5, ease: [0.16, 1, 0.3, 1] }}
-            className="absolute left-0 bg-gradient-to-r from-primary via-secondary to-primary bg-clip-text text-transparent whitespace-nowrap"
-            style={{ backgroundSize: "200% auto", animation: "aurora 6s ease infinite" }}
-          >
-            {heroWords[wordIndex]}
-          </motion.span>
-        </AnimatePresence>
+      <span className="bg-gradient-to-r from-primary via-secondary to-primary bg-clip-text text-transparent" style={{ backgroundSize: "200% auto", animation: "aurora 6s ease infinite" }}>
+        Ears Again.
       </span>
     </h1>
   );
