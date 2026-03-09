@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { useToast } from "@/hooks/use-toast";
 import { Link } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
+import { computeSpectralStats } from "@/lib/audio-features";
 
 type AnalysisResult = {
   synthetic_probability: number;
