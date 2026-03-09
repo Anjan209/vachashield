@@ -193,7 +193,7 @@ const Index = () => {
         duration: +duration.toFixed(2),
         bitrateKbps: +bitrateKbps.toFixed(1),
         fileSizeMB: +fileSizeMB.toFixed(2),
-        fileName,
+        
         sampleRate: audioBuffer.sampleRate,
         channels: audioBuffer.numberOfChannels,
       };
