@@ -136,7 +136,7 @@ const Index = () => {
       const audioBuffer = await audioCtx.decodeAudioData(arrayBuffer.slice(0));
       const rawData = audioBuffer.getChannelData(0);
       const duration = audioBuffer.duration;
-      const fileName = currentFile.name.toLowerCase();
+      
       const fileSizeMB = currentFile.size / (1024 * 1024);
 
       const segments = 80;
