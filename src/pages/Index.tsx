@@ -254,13 +254,22 @@ const Index = () => {
         : false;
       const synProb = isFake ? (data.confidence ?? 0.8) : (1 - (data.confidence ?? 0.8));
 
-      setResult({
+      const analysisResult: AnalysisResult = {
         synthetic_probability: synProb,
         human_probability: 1 - synProb,
         alert: synProb > 0.5,
         confidence: data.confidence > 0.8 ? "high" : data.confidence > 0.5 ? "medium" : "low",
         reasoning: data.reasoning || `Backend prediction: ${data.prediction} (confidence: ${data.confidence})`,
         key_indicators: data.key_indicators || [data.prediction],
+      };
+
+      setResult(analysisResult);
+
+      // Save to history
+      addEntry({
+        fileName: currentFile.name,
+        fileSize: currentFile.size,
+        ...analysisResult,
       });
     } catch (err: any) {
       console.error("Analysis failed:", err);
