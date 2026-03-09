@@ -1,14 +1,18 @@
-import { useState, useRef, useCallback, useEffect } from "react";
+import { useState, useRef, useCallback } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { Upload, RotateCcw, Download, ShieldCheck, AlertTriangle, Mic, MicOff, Shield, Zap, Waves } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/hooks/use-toast";
 import { Link } from "react-router-dom";
+import { supabase } from "@/integrations/supabase/client";
 
 type AnalysisResult = {
   synthetic_probability: number;
   human_probability: number;
   alert: boolean;
+  confidence?: string;
+  reasoning?: string;
+  key_indicators?: string[];
 };
 
 const ShieldLogo = () => (
@@ -68,7 +72,7 @@ const Index = () => {
   const [result, setResult] = useState<AnalysisResult | null>(null);
   const [isDragOver, setIsDragOver] = useState(false);
   const [isRecording, setIsRecording] = useState(false);
-  const [demoMode, setDemoMode] = useState(false);
+  
   const [showFeedbackThanks, setShowFeedbackThanks] = useState(false);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -119,167 +123,115 @@ const Index = () => {
     mediaRecorderRef.current = null;
   }, []);
 
-  const BACKEND_URL = "https://65162f82f6d318c0-103-211-18-113.serveousercontent.com/detect_voice";
-
   const analyzeFile = useCallback(async () => {
     if (!currentFile) return;
     setIsLoading(true);
     setResult(null);
 
-    if (BACKEND_URL) {
-      // Real backend call
-      try {
-        const formData = new FormData();
-        formData.append("file", currentFile);
-        const response = await fetch(BACKEND_URL, { method: "POST", body: formData });
-        if (!response.ok) throw new Error(`Server error: ${response.status}`);
-        const data = await response.json();
-        const synProb = data.synthetic_probability ?? data.fake_probability ?? data.probability ?? 0;
-        setResult({ synthetic_probability: synProb, human_probability: 1 - synProb, alert: synProb > 0.5 });
-      } catch (err: any) {
-        toast({ title: "Analysis failed", description: err.message || "Could not reach the backend server.", variant: "destructive" });
+    try {
+      // Extract audio features client-side
+      const arrayBuffer = await currentFile.arrayBuffer();
+      const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
+      const audioBuffer = await audioCtx.decodeAudioData(arrayBuffer.slice(0));
+      const rawData = audioBuffer.getChannelData(0);
+      const duration = audioBuffer.duration;
+      const fileName = currentFile.name.toLowerCase();
+      const fileSizeMB = currentFile.size / (1024 * 1024);
+
+      const segments = 80;
+      const segLen = Math.max(256, Math.floor(rawData.length / segments));
+
+      // RMS envelope
+      const rmsVals: number[] = [];
+      for (let i = 0; i < segments; i++) {
+        let sum = 0;
+        const start = i * segLen;
+        const end = Math.min(start + segLen, rawData.length);
+        for (let j = start; j < end; j++) sum += rawData[j] * rawData[j];
+        rmsVals.push(Math.sqrt(sum / Math.max(1, end - start)));
       }
-    } else {
-      // Client-side heuristic (no backend): more stable AI vs organic separation
-      await new Promise((r) => setTimeout(r, 1200));
+      const rmsMean = rmsVals.reduce((a, b) => a + b, 0) / rmsVals.length;
+      const rmsStd = Math.sqrt(rmsVals.reduce((s, v) => s + (v - rmsMean) ** 2, 0) / rmsVals.length);
+      const rmsCV = rmsMean > 0 ? rmsStd / rmsMean : 0;
 
-      let synProb: number;
+      // Silence ratio
+      const silenceThreshold = rmsMean * 0.12;
+      const silent = rmsVals.filter((v) => v < silenceThreshold).length;
+      const silenceRatio = silent / rmsVals.length;
 
-      if (demoMode) {
-        synProb = 0.88 + Math.random() * 0.1;
-      } else {
-        try {
-          const arrayBuffer = await currentFile.arrayBuffer();
-          const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
-          const audioBuffer = await audioCtx.decodeAudioData(arrayBuffer.slice(0));
-          const rawData = audioBuffer.getChannelData(0);
-          const duration = audioBuffer.duration;
-          const fileName = currentFile.name.toLowerCase();
-          const fileSizeMB = currentFile.size / (1024 * 1024);
-
-          const segments = 80;
-          const segLen = Math.max(256, Math.floor(rawData.length / segments));
-
-          // RMS envelope per segment
-          const rmsVals: number[] = [];
-          for (let i = 0; i < segments; i++) {
-            let sum = 0;
-            const start = i * segLen;
-            const end = Math.min(start + segLen, rawData.length);
-            for (let j = start; j < end; j++) sum += rawData[j] * rawData[j];
-            const denom = Math.max(1, end - start);
-            rmsVals.push(Math.sqrt(sum / denom));
-          }
-
-          const rmsMean = rmsVals.reduce((a, b) => a + b, 0) / rmsVals.length;
-          const rmsStd = Math.sqrt(rmsVals.reduce((s, v) => s + (v - rmsMean) ** 2, 0) / rmsVals.length);
-          const rmsCV = rmsMean > 0 ? rmsStd / rmsMean : 0;
-
-          // Silence / pause pattern
-          const silenceThreshold = rmsMean * 0.12;
-          const silent = rmsVals.filter((v) => v < silenceThreshold).length;
-          const silenceRatio = silent / rmsVals.length;
-
-          // Zero crossing metrics (per segment)
-          const zcrVals: number[] = [];
-          for (let i = 0; i < segments; i++) {
-            const start = i * segLen;
-            const end = Math.min(start + segLen, rawData.length);
-            let crossings = 0;
-            for (let j = start + 1; j < end; j++) {
-              if ((rawData[j] >= 0) !== (rawData[j - 1] >= 0)) crossings++;
-            }
-            const denom = Math.max(1, end - start);
-            zcrVals.push(crossings / denom);
-          }
-          const zcrMean = zcrVals.reduce((a, b) => a + b, 0) / zcrVals.length;
-          const zcrStd = Math.sqrt(zcrVals.reduce((s, v) => s + (v - zcrMean) ** 2, 0) / zcrVals.length);
-
-          // Amplitude percentile spread (dynamic range proxy)
-          const absSamples = rawData.map((v) => Math.abs(v));
-          const sorted = absSamples.slice().sort((a, b) => a - b);
-          const p = (q: number) => sorted[Math.floor((sorted.length - 1) * q)] ?? 0;
-          const dynSpread = p(0.95) - p(0.05);
-
-          // Effective bitrate proxy
-          const bitrateKbps = duration > 0 ? (currentFile.size * 8) / duration / 1000 : 0;
-
-          // --- Scoring ---
-          let score = 0.5;
-
-          // AI tends to be shorter clips
-          if (duration < 4) score += 0.18;
-          else if (duration < 8) score += 0.1;
-          else if (duration > 20) score -= 0.12;
-
-          // AI often has fewer natural pauses
-          if (silenceRatio < 0.025) score += 0.16;
-          else if (silenceRatio < 0.05) score += 0.08;
-          else if (silenceRatio > 0.1 && silenceRatio < 0.4) score -= 0.1;
-
-          // Human speech is usually less uniform in loudness
-          if (rmsCV < 0.18) score += 0.16;
-          else if (rmsCV < 0.26) score += 0.08;
-          else if (rmsCV > 0.45) score -= 0.12;
-
-          // ZCR variation: too stable can indicate synthetic generation
-          if (zcrStd < 0.012) score += 0.12;
-          else if (zcrStd < 0.02) score += 0.06;
-          else if (zcrStd > 0.035) score -= 0.08;
-
-          // Dynamic spread: very narrow spread often sounds over-smoothed (AI)
-          if (dynSpread < 0.22) score += 0.14;
-          else if (dynSpread > 0.42) score -= 0.1;
-
-          // Bitrate window seen often in TTS exports
-          if (bitrateKbps >= 32 && bitrateKbps <= 96) score += 0.05;
-          else if (bitrateKbps > 160) score -= 0.05;
-
-          // Name hints (strong prior)
-          if (
-            fileName.includes("ai") ||
-            fileName.includes("synthetic") ||
-            fileName.includes("generated") ||
-            fileName.includes("tts") ||
-            fileName.includes("clone") ||
-            fileName.includes("deepfake")
-          ) {
-            score += 0.22;
-          }
-          if (
-            fileName.includes("recording") ||
-            fileName.includes("voice memo") ||
-            fileName.includes("mic") ||
-            fileName.includes("human") ||
-            fileName.includes("organic") ||
-            fileName.includes("real")
-          ) {
-            score -= 0.2;
-          }
-
-          // Extra correction for large, long files (more likely organic capture)
-          if (duration > 18 && fileSizeMB > 1.2) score -= 0.1;
-
-          // If near undecided, bias slightly toward synthetic to reduce AI false negatives
-          if (Math.abs(score - 0.5) < 0.07) score += 0.08;
-
-          // Small noise to avoid identical repeated outputs
-          score += (Math.random() - 0.5) * 0.03;
-
-          synProb = Math.max(0.06, Math.min(0.94, score));
-          await audioCtx.close();
-        } catch (err) {
-          console.error("Audio analysis failed:", err);
-          synProb = 0.6 + (Math.random() - 0.5) * 0.08;
+      // ZCR
+      const zcrVals: number[] = [];
+      for (let i = 0; i < segments; i++) {
+        const start = i * segLen;
+        const end = Math.min(start + segLen, rawData.length);
+        let crossings = 0;
+        for (let j = start + 1; j < end; j++) {
+          if ((rawData[j] >= 0) !== (rawData[j - 1] >= 0)) crossings++;
         }
+        zcrVals.push(crossings / Math.max(1, end - start));
+      }
+      const zcrMean = zcrVals.reduce((a, b) => a + b, 0) / zcrVals.length;
+      const zcrStd = Math.sqrt(zcrVals.reduce((s, v) => s + (v - zcrMean) ** 2, 0) / zcrVals.length);
+
+      // Dynamic range
+      const absSamples = Array.from(rawData).map((v: number) => Math.abs(v));
+      const sorted = absSamples.sort((a, b) => a - b);
+      const p = (q: number): number => sorted[Math.floor((sorted.length - 1) * q)] ?? 0;
+      const dynSpread = p(0.95) - p(0.05);
+
+      // Bitrate
+      const bitrateKbps = duration > 0 ? (currentFile.size * 8) / duration / 1000 : 0;
+
+      await audioCtx.close();
+
+      const audioFeatures = {
+        rmsCV: +rmsCV.toFixed(4),
+        zcrStd: +zcrStd.toFixed(5),
+        zcrMean: +zcrMean.toFixed(4),
+        dynSpread: +dynSpread.toFixed(4),
+        silenceRatio: +silenceRatio.toFixed(4),
+        duration: +duration.toFixed(2),
+        bitrateKbps: +bitrateKbps.toFixed(1),
+        fileSizeMB: +fileSizeMB.toFixed(2),
+        fileName,
+        sampleRate: audioBuffer.sampleRate,
+        channels: audioBuffer.numberOfChannels,
+      };
+
+      // Call edge function
+      const { data, error } = await supabase.functions.invoke("analyze-audio", {
+        body: { audioFeatures },
+      });
+
+      if (error) {
+        throw new Error(error.message || "Edge function call failed");
       }
 
-      setResult({ synthetic_probability: synProb, human_probability: 1 - synProb, alert: synProb > 0.5 });
+      if (data?.error) {
+        throw new Error(data.error);
+      }
+
+      const synProb = data.synthetic_probability ?? 0.5;
+      setResult({
+        synthetic_probability: synProb,
+        human_probability: 1 - synProb,
+        alert: synProb > 0.5,
+        confidence: data.confidence,
+        reasoning: data.reasoning,
+        key_indicators: data.key_indicators,
+      });
+    } catch (err: any) {
+      console.error("Analysis failed:", err);
+      toast({
+        title: "Analysis failed",
+        description: err.message || "Could not analyze the audio file.",
+        variant: "destructive",
+      });
     }
 
     setIsLoading(false);
     setShowFeedbackThanks(false);
-  }, [currentFile, demoMode, toast]);
+  }, [currentFile, toast]);
 
   const resetUI = useCallback(() => {
     setCurrentFile(null);
@@ -319,7 +271,7 @@ const Index = () => {
         <motion.div initial={{ opacity: 0, y: 30 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.8, ease: [0.16, 1, 0.3, 1] }} className="text-center mb-16">
           <div className="inline-flex items-center gap-2 glass rounded-full px-4 py-1.5 mb-6 text-xs font-mono text-primary">
             <Zap className="w-3 h-3" />
-            Powered by PyTorch AudioCNN • Dual-Channel PCEN Analysis
+            Powered by Lovable AI • Gemini Audio Forensics Engine
           </div>
           <AnimatedHeadline />
           <p className="text-muted-foreground text-lg max-w-xl mx-auto leading-relaxed">
@@ -425,11 +377,7 @@ const Index = () => {
                         ANALYZE SIGNATURES →
                       </Button>
                     </div>
-                    {/* Hidden demo toggle */}
-                    <label className="absolute bottom-3 right-5 opacity-20 hover:opacity-40 transition-opacity cursor-pointer text-[10px] font-mono flex items-center gap-1">
-                      <input type="checkbox" checked={demoMode} onChange={(e) => setDemoMode(e.target.checked)} className="w-3 h-3" />
-                      DEMO
-                    </label>
+                    
                   </motion.div>
                 )}
               </div>
@@ -534,19 +482,42 @@ const Index = () => {
                     </div>
                   </div>
 
-                  {/* Spectrogram Placeholder */}
+                  {/* AI Reasoning Panel */}
                   <div>
-                    <p className="text-xs text-muted-foreground font-mono uppercase tracking-wider mb-3">Acoustic Feature Map</p>
-                    <div className="h-[200px] rounded-2xl bg-muted/50 border border-border flex items-center justify-center relative overflow-hidden">
-                      <div className="absolute inset-0 scan-line opacity-20" />
-                      <div className="text-center relative z-10">
-                        <Waves className="w-8 h-8 text-muted-foreground/40 mx-auto mb-2" />
-                        <p className="text-xs text-muted-foreground font-mono">Mel-Spectrogram</p>
-                        <p className="text-[10px] text-muted-foreground/60 font-mono">Connect backend for live rendering</p>
-                      </div>
+                    <p className="text-xs text-muted-foreground font-mono uppercase tracking-wider mb-3">AI Analysis Reasoning</p>
+                    <div className="rounded-2xl bg-muted/50 border border-border p-5 relative overflow-hidden">
+                      {result.confidence && (
+                        <div className="flex items-center gap-2 mb-3">
+                          <span className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground">Confidence:</span>
+                          <span className={`text-xs font-mono font-bold uppercase ${
+                            result.confidence === "high" ? "text-safe" : result.confidence === "medium" ? "text-warning" : "text-destructive"
+                          }`}>{result.confidence}</span>
+                        </div>
+                      )}
+                      {result.reasoning && (
+                        <p className="text-sm text-foreground/80 leading-relaxed mb-4">{result.reasoning}</p>
+                      )}
+                      {result.key_indicators && result.key_indicators.length > 0 && (
+                        <div>
+                          <p className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground mb-2">Key Indicators</p>
+                          <div className="flex flex-wrap gap-2">
+                            {result.key_indicators.map((indicator, i) => (
+                              <span key={i} className="text-xs font-mono px-2.5 py-1 rounded-lg bg-primary/10 text-primary border border-primary/20">
+                                {indicator}
+                              </span>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                      {!result.reasoning && (
+                        <div className="text-center py-4">
+                          <Waves className="w-8 h-8 text-muted-foreground/40 mx-auto mb-2" />
+                          <p className="text-xs text-muted-foreground font-mono">Analysis details unavailable</p>
+                        </div>
+                      )}
                     </div>
                     <p className="text-[10px] text-muted-foreground/60 mt-2 font-mono italic">
-                      * 16kHz Mel-Spectrograms → PyTorch AudioCNN dual-channel PCEN pipeline
+                      * Powered by Lovable AI • Gemini audio forensics analysis
                     </p>
                   </div>
                 </div>
