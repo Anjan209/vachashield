@@ -198,7 +198,7 @@ const Index = () => {
     setShowFeedbackThanks(false);
   }, [currentFile, toast]);
 
-      const segments = 80;
+
       const segLen = Math.max(256, Math.floor(rawData.length / segments));
 
       // RMS envelope
