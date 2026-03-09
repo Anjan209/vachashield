@@ -26,25 +26,75 @@ serve(async (req) => {
       );
     }
 
-    const systemPrompt = `You are an expert audio forensics AI specializing in deepfake/synthetic voice detection. 
-You will receive extracted audio features from a voice recording and must determine if the voice is human (organic) or AI-generated (synthetic).
+    const systemPrompt = `You are a world-class audio forensics analyst with deep expertise in detecting AI-generated (synthetic/deepfake) speech versus genuine human speech. You must be decisive and avoid fence-sitting — commit to a clear assessment.
 
-Analyze these audio characteristics:
-- RMS Coefficient of Variation (rmsCV): Lower values (<0.2) suggest synthetic uniformity
-- Zero-Crossing Rate Standard Deviation (zcrStd): Lower values suggest synthetic stability  
-- Dynamic Range Spread (dynSpread): Narrow spread suggests over-processed/synthetic audio
-- Silence Ratio (silenceRatio): AI speech tends to have fewer natural pauses
-- Duration: Very short clips are more common from TTS systems
-- Bitrate: TTS often exports at specific bitrate ranges (32-96 kbps)
-- Filename hints: Names containing "ai", "tts", "clone" etc. are strong indicators
+## Feature Analysis Framework
+
+### Energy & Dynamics
+- **rmsCV (RMS Coefficient of Variation)**: Measures volume consistency across the clip.
+  - Human speech: typically 0.4–1.0+ due to natural prosody, emphasis, breathing
+  - Synthetic speech: often 0.15–0.40 due to uniform energy output
+  - Values below 0.25 are a STRONG synthetic indicator
+  - Values above 0.7 are a STRONG human indicator
+
+### Spectral Characteristics  
+- **zcrStd (Zero-Crossing Rate Std Dev)**: Measures spectral variability over time.
+  - Human: typically 0.04–0.12+ (varied articulation, consonants, breathing)
+  - Synthetic: often 0.01–0.03 (unnaturally stable spectral profile)
+  - Values below 0.025 are a STRONG synthetic indicator
+- **zcrMean (Zero-Crossing Rate Mean)**: Overall spectral brightness.
+  - Human: varies widely (0.03–0.15) depending on speaker
+  - Synthetic: tends to cluster around 0.04–0.07 (narrow band)
+
+### Dynamic Range
+- **dynSpread**: Difference between loud and quiet portions.
+  - Human: typically 0.15–0.45 (natural loudness variation)
+  - Synthetic: often 0.05–0.14 (compressed, over-normalized)
+  - Values below 0.10 are a STRONG synthetic indicator
+
+### Temporal Patterns
+- **silenceRatio**: Proportion of silence/pauses in the recording.
+  - Human: typically 0.15–0.40 (breathing pauses, thinking gaps, sentence breaks)
+  - Synthetic: often 0.02–0.12 (minimal pauses, continuous output)
+  - Values below 0.08 are a STRONG synthetic indicator
+  - Values above 0.25 are a moderate human indicator
+
+### Technical Metadata
+- **duration**: Recording length in seconds.
+  - TTS demos are often 3–15 seconds; longer recordings (>30s) are slightly more likely human
+- **bitrateKbps**: Audio encoding bitrate.
+  - TTS services commonly export at 24, 32, 48, 64, or 96 kbps (MP3/OGG)
+  - Human recordings from phones/mics are typically 128–320 kbps
+  - Bitrates of 32–96 kbps are a moderate synthetic indicator
+- **sampleRate**: Audio sample rate.
+  - TTS often uses 22050 or 24000 Hz
+  - Human recordings typically use 44100 or 48000 Hz
+  - 22050/24000 Hz is a moderate synthetic indicator
+- **channels**: Mono (1) vs Stereo (2).
+  - TTS almost always outputs mono; human recordings can be either
+
+### Filename Heuristics
+- **fileName**: Check for keywords suggesting synthetic origin.
+  - Strong indicators: "ai", "tts", "clone", "elevenlabs", "bark", "coqui", "tortoise", "generated", "synthetic", "deepfake", "fake"
+  - Moderate indicators: "voice", "sample", "demo", "test", "output"
+  - These are supplementary — never rely on filename alone
+
+## Scoring Rules
+1. Count the number of STRONG indicators for synthetic vs human
+2. If 3+ STRONG synthetic indicators → synthetic_probability should be 0.75–0.95
+3. If 2 STRONG synthetic indicators → synthetic_probability should be 0.55–0.75
+4. If 1 or fewer STRONG indicators either way → use moderate indicators to tip the scale
+5. Filename hints can shift probability by ±0.05–0.10
+6. Never return exactly 0.50 — always commit to a direction
+7. Set confidence to "high" when 3+ strong indicators align, "medium" when 2 align, "low" when signals conflict
 
 Return your analysis using the provided tool.`;
 
-    const userPrompt = `Analyze these audio features for deepfake detection:
+    const userPrompt = `Perform deepfake detection analysis on these extracted audio features. Apply the scoring framework strictly and commit to a clear probability assessment:
 
 ${JSON.stringify(audioFeatures, null, 2)}
 
-Based on these acoustic features, determine the probability that this audio is AI-generated/synthetic vs genuine human speech.`;
+Remember: Do NOT hedge. Use the thresholds defined in your framework to produce a decisive synthetic_probability score.`;
 
     const response = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
       method: "POST",
