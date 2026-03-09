@@ -129,39 +129,74 @@ const Index = () => {
     setResult(null);
 
     try {
-      // Decode audio on main thread (requires AudioContext)
+      // Extract audio features client-side
       const arrayBuffer = await currentFile.arrayBuffer();
       const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
       const audioBuffer = await audioCtx.decodeAudioData(arrayBuffer.slice(0));
       const rawData = audioBuffer.getChannelData(0);
+      const duration = audioBuffer.duration;
+      const fileName = currentFile.name.toLowerCase();
+      const fileSizeMB = currentFile.size / (1024 * 1024);
+
+      const segments = 80;
+      const segLen = Math.max(256, Math.floor(rawData.length / segments));
+
+      // RMS envelope
+      const rmsVals: number[] = [];
+      for (let i = 0; i < segments; i++) {
+        let sum = 0;
+        const start = i * segLen;
+        const end = Math.min(start + segLen, rawData.length);
+        for (let j = start; j < end; j++) sum += rawData[j] * rawData[j];
+        rmsVals.push(Math.sqrt(sum / Math.max(1, end - start)));
+      }
+      const rmsMean = rmsVals.reduce((a, b) => a + b, 0) / rmsVals.length;
+      const rmsStd = Math.sqrt(rmsVals.reduce((s, v) => s + (v - rmsMean) ** 2, 0) / rmsVals.length);
+      const rmsCV = rmsMean > 0 ? rmsStd / rmsMean : 0;
+
+      // Silence ratio
+      const silenceThreshold = rmsMean * 0.12;
+      const silent = rmsVals.filter((v) => v < silenceThreshold).length;
+      const silenceRatio = silent / rmsVals.length;
+
+      // ZCR
+      const zcrVals: number[] = [];
+      for (let i = 0; i < segments; i++) {
+        const start = i * segLen;
+        const end = Math.min(start + segLen, rawData.length);
+        let crossings = 0;
+        for (let j = start + 1; j < end; j++) {
+          if ((rawData[j] >= 0) !== (rawData[j - 1] >= 0)) crossings++;
+        }
+        zcrVals.push(crossings / Math.max(1, end - start));
+      }
+      const zcrMean = zcrVals.reduce((a, b) => a + b, 0) / zcrVals.length;
+      const zcrStd = Math.sqrt(zcrVals.reduce((s, v) => s + (v - zcrMean) ** 2, 0) / zcrVals.length);
+
+      // Dynamic range
+      const absSamples = Array.from(rawData).map((v: number) => Math.abs(v));
+      const sorted = absSamples.sort((a, b) => a - b);
+      const p = (q: number): number => sorted[Math.floor((sorted.length - 1) * q)] ?? 0;
+      const dynSpread = p(0.95) - p(0.05);
+
+      // Bitrate
+      const bitrateKbps = duration > 0 ? (currentFile.size * 8) / duration / 1000 : 0;
+
       await audioCtx.close();
 
-      // Run heavy feature extraction in Web Worker (off main thread)
-      const audioFeatures = await new Promise<Record<string, any>>((resolve, reject) => {
-        const worker = new Worker(
-          new URL("../workers/audioFeatureExtractor.ts", import.meta.url),
-          { type: "module" }
-        );
-        worker.onmessage = (e) => {
-          resolve(e.data);
-          worker.terminate();
-        };
-        worker.onerror = (e) => {
-          reject(new Error(e.message || "Worker error"));
-          worker.terminate();
-        };
-        const rawCopy = new Float32Array(rawData);
-        worker.postMessage(
-          {
-            rawData: rawCopy,
-            sampleRate: audioBuffer.sampleRate,
-            duration: audioBuffer.duration,
-            channels: audioBuffer.numberOfChannels,
-            fileSize: currentFile.size,
-          },
-          [rawCopy.buffer]
-        );
-      });
+      const audioFeatures = {
+        rmsCV: +rmsCV.toFixed(4),
+        zcrStd: +zcrStd.toFixed(5),
+        zcrMean: +zcrMean.toFixed(4),
+        dynSpread: +dynSpread.toFixed(4),
+        silenceRatio: +silenceRatio.toFixed(4),
+        duration: +duration.toFixed(2),
+        bitrateKbps: +bitrateKbps.toFixed(1),
+        fileSizeMB: +fileSizeMB.toFixed(2),
+        fileName,
+        sampleRate: audioBuffer.sampleRate,
+        channels: audioBuffer.numberOfChannels,
+      };
 
       // Call edge function
       const { data, error } = await supabase.functions.invoke("analyze-audio", {
@@ -197,7 +232,6 @@ const Index = () => {
     setIsLoading(false);
     setShowFeedbackThanks(false);
   }, [currentFile, toast]);
-
 
   const resetUI = useCallback(() => {
     setCurrentFile(null);
