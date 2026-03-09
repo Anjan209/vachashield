@@ -123,6 +123,16 @@ Based on these acoustic features, determine the probability that this audio is A
 
     const analysis = JSON.parse(toolCall.function.arguments);
 
+    // Safety: if we don't have the richer spectral features, cap confidence at medium.
+    const hasSpectral =
+      typeof audioFeatures?.spectralCentroidMean === "number" &&
+      typeof audioFeatures?.spectralFlatnessMean === "number" &&
+      typeof audioFeatures?.spectralFluxMean === "number";
+
+    if (!hasSpectral && analysis?.confidence === "high") {
+      analysis.confidence = "medium";
+    }
+
     return new Response(JSON.stringify(analysis), {
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });

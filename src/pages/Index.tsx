@@ -214,7 +214,13 @@ const Index = () => {
         duration: +duration.toFixed(2),
         bitrateKbps: +bitrateKbps.toFixed(1),
         fileSizeMB: +fileSizeMB.toFixed(2),
-        
+
+        spectralCentroidMean: +spectral.spectralCentroidMean.toFixed(4),
+        spectralCentroidStd: +spectral.spectralCentroidStd.toFixed(4),
+        spectralFlatnessMean: +spectral.spectralFlatnessMean.toFixed(4),
+        spectralRolloffMean: +spectral.spectralRolloffMean.toFixed(4),
+        spectralFluxMean: +spectral.spectralFluxMean.toFixed(4),
+
         sampleRate: audioBuffer.sampleRate,
         channels: audioBuffer.numberOfChannels,
       };
