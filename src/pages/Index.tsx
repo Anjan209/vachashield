@@ -182,6 +182,115 @@ const Index = () => {
       // Bitrate
       const bitrateKbps = duration > 0 ? (currentFile.size * 8) / duration / 1000 : 0;
 
+      // --- NEW FEATURES ---
+
+      // Spectral Centroid (brightness measure) via FFT
+      const fftSize = 2048;
+      const analyser = audioCtx.createAnalyser();
+      analyser.fftSize = fftSize;
+      const offlineCtx = new OfflineAudioContext(1, rawData.length, audioBuffer.sampleRate);
+      const source = offlineCtx.createBufferSource();
+      const clonedBuffer = offlineCtx.createBuffer(1, rawData.length, audioBuffer.sampleRate);
+      clonedBuffer.getChannelData(0).set(rawData);
+      source.buffer = clonedBuffer;
+      source.connect(offlineCtx.destination);
+      source.start();
+      await offlineCtx.startRendering();
+
+      // Compute spectral centroid from raw data using manual DFT on segments
+      const spectralCentroids: number[] = [];
+      const spectralFlatnessVals: number[] = [];
+      const halfFFT = fftSize / 2;
+      for (let i = 0; i < Math.min(segments, Math.floor(rawData.length / fftSize)); i++) {
+        const start = i * fftSize;
+        const magnitudes: number[] = [];
+        for (let k = 0; k < halfFFT; k++) {
+          let re = 0, im = 0;
+          for (let n = 0; n < fftSize; n++) {
+            const angle = (2 * Math.PI * k * n) / fftSize;
+            re += (rawData[start + n] || 0) * Math.cos(angle);
+            im -= (rawData[start + n] || 0) * Math.sin(angle);
+          }
+          magnitudes.push(Math.sqrt(re * re + im * im));
+        }
+        // Spectral centroid
+        let weightedSum = 0, magSum = 0;
+        for (let k = 0; k < halfFFT; k++) {
+          const freq = (k * audioBuffer.sampleRate) / fftSize;
+          weightedSum += freq * magnitudes[k];
+          magSum += magnitudes[k];
+        }
+        spectralCentroids.push(magSum > 0 ? weightedSum / magSum : 0);
+
+        // Spectral flatness (geometric mean / arithmetic mean)
+        const nonZero = magnitudes.filter(m => m > 1e-10);
+        if (nonZero.length > 0) {
+          const logSum = nonZero.reduce((s, m) => s + Math.log(m), 0);
+          const geoMean = Math.exp(logSum / nonZero.length);
+          const ariMean = nonZero.reduce((s, m) => s + m, 0) / nonZero.length;
+          spectralFlatnessVals.push(ariMean > 0 ? geoMean / ariMean : 0);
+        } else {
+          spectralFlatnessVals.push(0);
+        }
+      }
+
+      const scMean = spectralCentroids.length > 0 ? spectralCentroids.reduce((a, b) => a + b, 0) / spectralCentroids.length : 0;
+      const scStd = spectralCentroids.length > 0 ? Math.sqrt(spectralCentroids.reduce((s, v) => s + (v - scMean) ** 2, 0) / spectralCentroids.length) : 0;
+      const sfMean = spectralFlatnessVals.length > 0 ? spectralFlatnessVals.reduce((a, b) => a + b, 0) / spectralFlatnessVals.length : 0;
+
+      // Energy entropy (how uniformly energy is distributed across segments)
+      const totalEnergy = rmsVals.reduce((s, v) => s + v * v, 0);
+      let energyEntropy = 0;
+      if (totalEnergy > 0) {
+        for (const rms of rmsVals) {
+          const p = (rms * rms) / totalEnergy;
+          if (p > 0) energyEntropy -= p * Math.log2(p);
+        }
+      }
+      const maxEntropy = Math.log2(rmsVals.length);
+      const normalizedEntropy = maxEntropy > 0 ? energyEntropy / maxEntropy : 0;
+
+      // Pitch stability (autocorrelation-based F0 estimation per segment)
+      const pitchEstimates: number[] = [];
+      const pitchSegLen = Math.max(2048, Math.floor(rawData.length / 20));
+      for (let i = 0; i < 20; i++) {
+        const start = i * pitchSegLen;
+        const end = Math.min(start + pitchSegLen, rawData.length);
+        const seg = rawData.slice(start, end);
+        // Autocorrelation
+        const minLag = Math.floor(audioBuffer.sampleRate / 500); // 500Hz max
+        const maxLag = Math.floor(audioBuffer.sampleRate / 60);  // 60Hz min
+        let bestLag = minLag, bestCorr = -1;
+        for (let lag = minLag; lag < Math.min(maxLag, seg.length / 2); lag++) {
+          let corr = 0, norm1 = 0, norm2 = 0;
+          for (let j = 0; j < seg.length - lag; j++) {
+            corr += seg[j] * seg[j + lag];
+            norm1 += seg[j] * seg[j];
+            norm2 += seg[j + lag] * seg[j + lag];
+          }
+          const normalized = norm1 > 0 && norm2 > 0 ? corr / Math.sqrt(norm1 * norm2) : 0;
+          if (normalized > bestCorr) { bestCorr = normalized; bestLag = lag; }
+        }
+        if (bestCorr > 0.3) {
+          pitchEstimates.push(audioBuffer.sampleRate / bestLag);
+        }
+      }
+      const pitchMean = pitchEstimates.length > 0 ? pitchEstimates.reduce((a, b) => a + b, 0) / pitchEstimates.length : 0;
+      const pitchStd = pitchEstimates.length > 1
+        ? Math.sqrt(pitchEstimates.reduce((s, v) => s + (v - pitchMean) ** 2, 0) / pitchEstimates.length)
+        : 0;
+      const pitchCV = pitchMean > 0 ? pitchStd / pitchMean : 0;
+
+      // Temporal attack sharpness (onset detection via energy derivative)
+      const energyDiffs: number[] = [];
+      for (let i = 1; i < rmsVals.length; i++) {
+        energyDiffs.push(Math.abs(rmsVals[i] - rmsVals[i - 1]));
+      }
+      const attackSharpness = energyDiffs.length > 0 ? energyDiffs.reduce((a, b) => a + b, 0) / energyDiffs.length : 0;
+      const attackSharpnessStd = energyDiffs.length > 0
+        ? Math.sqrt(energyDiffs.reduce((s, v) => s + (v - attackSharpness) ** 2, 0) / energyDiffs.length)
+        : 0;
+
       await audioCtx.close();
 
       const audioFeatures = {
@@ -196,6 +305,16 @@ const Index = () => {
         fileName,
         sampleRate: audioBuffer.sampleRate,
         channels: audioBuffer.numberOfChannels,
+        // New features
+        spectralCentroidMean: +scMean.toFixed(2),
+        spectralCentroidStd: +scStd.toFixed(2),
+        spectralFlatnessMean: +sfMean.toFixed(5),
+        energyEntropyNormalized: +normalizedEntropy.toFixed(4),
+        pitchMeanHz: +pitchMean.toFixed(1),
+        pitchCV: +pitchCV.toFixed(4),
+        pitchSegmentsDetected: pitchEstimates.length,
+        attackSharpnessMean: +attackSharpness.toFixed(5),
+        attackSharpnessStd: +attackSharpnessStd.toFixed(5),
       };
 
       // Call edge function

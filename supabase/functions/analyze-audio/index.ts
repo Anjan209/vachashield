@@ -30,13 +30,31 @@ serve(async (req) => {
 You will receive extracted audio features from a voice recording and must determine if the voice is human (organic) or AI-generated (synthetic).
 
 Analyze these audio characteristics:
+
+TEMPORAL FEATURES:
 - RMS Coefficient of Variation (rmsCV): Lower values (<0.2) suggest synthetic uniformity
-- Zero-Crossing Rate Standard Deviation (zcrStd): Lower values suggest synthetic stability  
 - Dynamic Range Spread (dynSpread): Narrow spread suggests over-processed/synthetic audio
 - Silence Ratio (silenceRatio): AI speech tends to have fewer natural pauses
+- Attack Sharpness Mean/Std: Measures onset energy transitions. Synthetic speech often has unnaturally uniform attack patterns (low std)
+
+SPECTRAL FEATURES:
+- Zero-Crossing Rate Std (zcrStd): Lower values suggest synthetic spectral stability
+- Spectral Centroid Mean/Std: Average brightness of audio. Synthetic voices often show unnaturally stable centroid (low std relative to mean)
+- Spectral Flatness Mean: Values closer to 1.0 = noise-like, closer to 0 = tonal. Synthetic speech may show unusual flatness patterns
+
+PROSODIC FEATURES:
+- Pitch Mean (Hz) and Pitch CV: Fundamental frequency variation. Very low pitch CV (<0.05) suggests monotone synthetic speech. Human speech typically shows CV of 0.1-0.3
+- Pitch Segments Detected: Fewer detected segments may indicate processing artifacts
+
+ENERGY FEATURES:
+- Energy Entropy (normalized 0-1): Values very close to 1.0 suggest unnaturally uniform energy distribution (synthetic). Human speech typically shows 0.7-0.9
+
+METADATA:
 - Duration: Very short clips are more common from TTS systems
 - Bitrate: TTS often exports at specific bitrate ranges (32-96 kbps)
-- Filename hints: Names containing "ai", "tts", "clone" etc. are strong indicators
+- Filename hints: Names containing "ai", "tts", "clone" etc. are indicators
+
+Weight spectral and prosodic features most heavily. Cross-correlate features — e.g. low pitch CV + low spectral centroid std + high energy entropy = strong synthetic signal.
 
 Return your analysis using the provided tool.`;
 
