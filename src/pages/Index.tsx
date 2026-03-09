@@ -225,27 +225,40 @@ const Index = () => {
         channels: audioBuffer.numberOfChannels,
       };
 
-      // Call edge function
-      const { data, error } = await supabase.functions.invoke("analyze-audio", {
-        body: { audioFeatures },
+      // Convert audio file to base64
+      const fileBuffer = await currentFile.arrayBuffer();
+      const base64Audio = btoa(
+        new Uint8Array(fileBuffer).reduce((data, byte) => data + String.fromCharCode(byte), "")
+      );
+
+      // Send to custom backend
+      const BACKEND_URL = "https://e2d242517012af97-103-211-18-113.serveousercontent.com";
+      const response = await fetch(BACKEND_URL, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ audio: base64Audio, audioFeatures }),
       });
 
-      if (error) {
-        throw new Error(error.message || "Edge function call failed");
+      if (!response.ok) {
+        const errText = await response.text();
+        throw new Error(`Backend error (${response.status}): ${errText}`);
       }
 
-      if (data?.error) {
-        throw new Error(data.error);
-      }
+      const data = await response.json();
 
-      const synProb = data.synthetic_probability ?? 0.5;
+      // Map backend response: expects { prediction: string, confidence: number }
+      const isFake = typeof data.prediction === "string"
+        ? data.prediction.toLowerCase().includes("fake") || data.prediction.toLowerCase().includes("synthetic") || data.prediction.toLowerCase().includes("ai")
+        : false;
+      const synProb = isFake ? (data.confidence ?? 0.8) : (1 - (data.confidence ?? 0.8));
+
       setResult({
         synthetic_probability: synProb,
         human_probability: 1 - synProb,
         alert: synProb > 0.5,
-        confidence: data.confidence,
-        reasoning: data.reasoning,
-        key_indicators: data.key_indicators,
+        confidence: data.confidence > 0.8 ? "high" : data.confidence > 0.5 ? "medium" : "low",
+        reasoning: data.reasoning || `Backend prediction: ${data.prediction} (confidence: ${data.confidence})`,
+        key_indicators: data.key_indicators || [data.prediction],
       });
     } catch (err: any) {
       console.error("Analysis failed:", err);
