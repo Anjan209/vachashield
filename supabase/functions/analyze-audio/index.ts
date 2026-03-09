@@ -36,7 +36,7 @@ Analyze these audio characteristics:
 - Silence Ratio (silenceRatio): AI speech tends to have fewer natural pauses
 - Duration: Very short clips are more common from TTS systems
 - Bitrate: TTS often exports at specific bitrate ranges (32-96 kbps)
-- Filename hints: Names containing "ai", "tts", "clone" etc. are strong indicators
+
 
 Return your analysis using the provided tool.`;
 
