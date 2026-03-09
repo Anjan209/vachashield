@@ -73,18 +73,12 @@ serve(async (req) => {
 - **channels**: Mono (1) vs Stereo (2).
   - TTS almost always outputs mono; human recordings can be either
 
-### Filename Heuristics
-- **fileName**: Check for keywords suggesting synthetic origin.
-  - Strong indicators: "ai", "tts", "clone", "elevenlabs", "bark", "coqui", "tortoise", "generated", "synthetic", "deepfake", "fake"
-  - Moderate indicators: "voice", "sample", "demo", "test", "output"
-  - These are supplementary — never rely on filename alone
-
 ## Scoring Rules
-1. Count the number of STRONG indicators for synthetic vs human
-2. If 3+ STRONG synthetic indicators → synthetic_probability should be 0.75–0.95
-3. If 2 STRONG synthetic indicators → synthetic_probability should be 0.55–0.75
-4. If 1 or fewer STRONG indicators either way → use moderate indicators to tip the scale
-5. Filename hints can shift probability by ±0.05–0.10
+1. **IGNORE the filename entirely** — filenames are unreliable and must NOT influence the score
+2. Count the number of STRONG indicators for synthetic vs human based on audio features ONLY
+3. If 3+ STRONG synthetic indicators → synthetic_probability should be 0.75–0.95
+4. If 2 STRONG synthetic indicators → synthetic_probability should be 0.55–0.75
+5. If 1 or fewer STRONG indicators either way → use moderate indicators to tip the scale
 6. Never return exactly 0.50 — always commit to a direction
 7. Set confidence to "high" when 3+ strong indicators align, "medium" when 2 align, "low" when signals conflict
 
