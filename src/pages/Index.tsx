@@ -309,6 +309,9 @@ const Index = () => {
           </div>
         </div>
         <div className="flex items-center gap-3">
+          <Button variant="ghost" size="sm" className="font-mono text-xs text-muted-foreground hover:text-primary" onClick={() => setHistoryOpen(true)}>
+            <Clock className="w-3.5 h-3.5 mr-1.5" /> HISTORY{history.length > 0 ? ` (${history.length})` : ""}
+          </Button>
           <Link to="/mobile" className="text-xs text-muted-foreground hover:text-primary transition-colors font-mono uppercase tracking-wider">
             Mobile App →
           </Link>
