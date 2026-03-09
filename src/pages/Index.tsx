@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { useToast } from "@/hooks/use-toast";
 import { Link } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
+import { computeSpectralStats } from "@/lib/audio-features";
 
 type AnalysisResult = {
   synthetic_probability: number;
@@ -135,7 +136,7 @@ const Index = () => {
       const audioBuffer = await audioCtx.decodeAudioData(arrayBuffer.slice(0));
       const rawData = audioBuffer.getChannelData(0);
       const duration = audioBuffer.duration;
-      const fileName = currentFile.name.toLowerCase();
+      
       const fileSizeMB = currentFile.size / (1024 * 1024);
 
       const segments = 80;
@@ -182,6 +183,26 @@ const Index = () => {
       // Bitrate
       const bitrateKbps = duration > 0 ? (currentFile.size * 8) / duration / 1000 : 0;
 
+      // Spectral stats (helps detect overly-smooth/over-regular synthetic speech)
+      let spectral = {
+        spectralCentroidMean: 0,
+        spectralCentroidStd: 0,
+        spectralFlatnessMean: 0,
+        spectralRolloffMean: 0,
+        spectralFluxMean: 0,
+      };
+      try {
+        spectral = computeSpectralStats(rawData, audioBuffer.sampleRate, {
+          maxSeconds: 20,
+          targetSampleRate: 16000,
+          frameSize: 2048,
+          hopSize: 1024,
+          rolloffEnergy: 0.85,
+        });
+      } catch {
+        // If spectral extraction fails, continue with the simpler features.
+      }
+
       await audioCtx.close();
 
       const audioFeatures = {
@@ -193,7 +214,13 @@ const Index = () => {
         duration: +duration.toFixed(2),
         bitrateKbps: +bitrateKbps.toFixed(1),
         fileSizeMB: +fileSizeMB.toFixed(2),
-        
+
+        spectralCentroidMean: +spectral.spectralCentroidMean.toFixed(4),
+        spectralCentroidStd: +spectral.spectralCentroidStd.toFixed(4),
+        spectralFlatnessMean: +spectral.spectralFlatnessMean.toFixed(4),
+        spectralRolloffMean: +spectral.spectralRolloffMean.toFixed(4),
+        spectralFluxMean: +spectral.spectralFluxMean.toFixed(4),
+
         sampleRate: audioBuffer.sampleRate,
         channels: audioBuffer.numberOfChannels,
       };

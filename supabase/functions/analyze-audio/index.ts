@@ -26,17 +26,22 @@ serve(async (req) => {
       );
     }
 
-    const systemPrompt = `You are an expert audio forensics AI specializing in deepfake/synthetic voice detection. 
-You will receive extracted audio features from a voice recording and must determine if the voice is human (organic) or AI-generated (synthetic).
+    const systemPrompt = `You are an expert audio forensics AI specializing in deepfake/synthetic voice detection.
+You will receive extracted audio features from a voice recording and must estimate the probability the voice is AI-generated (synthetic) vs human (organic).
+
+IMPORTANT:
+- Do NOT use file names or user-provided labels as evidence (they are untrusted).
+- These are summary features; if evidence is mixed or weak, do not output high confidence.
 
 Analyze these audio characteristics:
-- RMS Coefficient of Variation (rmsCV): Lower values (<0.2) suggest synthetic uniformity
-- Zero-Crossing Rate Standard Deviation (zcrStd): Lower values suggest synthetic stability  
-- Dynamic Range Spread (dynSpread): Narrow spread suggests over-processed/synthetic audio
-- Silence Ratio (silenceRatio): AI speech tends to have fewer natural pauses
-- Duration: Very short clips are more common from TTS systems
-- Bitrate: TTS often exports at specific bitrate ranges (32-96 kbps)
-
+- RMS Coefficient of Variation (rmsCV): very low values suggest synthetic uniformity
+- Zero-Crossing Rate stability (zcrStd / zcrMean)
+- Dynamic Range Spread (dynSpread): narrow spread may indicate over-processing
+- Silence Ratio (silenceRatio): unnatural pause patterns can be suspicious
+- Spectral Centroid mean/std (spectralCentroidMean/Std): overly consistent spectral balance can be synthetic
+- Spectral Flatness mean (spectralFlatnessMean)
+- Spectral Rolloff mean (spectralRolloffMean): 85% energy rolloff
+- Spectral Flux mean (spectralFluxMean): low flux can indicate overly smooth synthesis
 
 Return your analysis using the provided tool.`;
 
@@ -122,6 +127,16 @@ Based on these acoustic features, determine the probability that this audio is A
     }
 
     const analysis = JSON.parse(toolCall.function.arguments);
+
+    // Safety: if we don't have the richer spectral features, cap confidence at medium.
+    const hasSpectral =
+      typeof audioFeatures?.spectralCentroidMean === "number" &&
+      typeof audioFeatures?.spectralFlatnessMean === "number" &&
+      typeof audioFeatures?.spectralFluxMean === "number";
+
+    if (!hasSpectral && analysis?.confidence === "high") {
+      analysis.confidence = "medium";
+    }
 
     return new Response(JSON.stringify(analysis), {
       headers: { ...corsHeaders, "Content-Type": "application/json" },
