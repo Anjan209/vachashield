@@ -183,6 +183,26 @@ const Index = () => {
       // Bitrate
       const bitrateKbps = duration > 0 ? (currentFile.size * 8) / duration / 1000 : 0;
 
+      // Spectral stats (helps detect overly-smooth/over-regular synthetic speech)
+      let spectral = {
+        spectralCentroidMean: 0,
+        spectralCentroidStd: 0,
+        spectralFlatnessMean: 0,
+        spectralRolloffMean: 0,
+        spectralFluxMean: 0,
+      };
+      try {
+        spectral = computeSpectralStats(rawData, audioBuffer.sampleRate, {
+          maxSeconds: 20,
+          targetSampleRate: 16000,
+          frameSize: 2048,
+          hopSize: 1024,
+          rolloffEnergy: 0.85,
+        });
+      } catch {
+        // If spectral extraction fails, continue with the simpler features.
+      }
+
       await audioCtx.close();
 
       const audioFeatures = {
