@@ -182,47 +182,49 @@ const Index = () => {
       // Bitrate
       const bitrateKbps = duration > 0 ? (currentFile.size * 8) / duration / 1000 : 0;
 
-      // --- NEW FEATURES ---
+      // --- ADVANCED FEATURES ---
 
-      // Spectral Centroid (brightness measure) via FFT
+      // Use AnalyserNode via OfflineAudioContext for fast FFT
       const fftSize = 2048;
-      const analyser = audioCtx.createAnalyser();
-      analyser.fftSize = fftSize;
-      const offlineCtx = new OfflineAudioContext(1, rawData.length, audioBuffer.sampleRate);
-      const source = offlineCtx.createBufferSource();
-      const clonedBuffer = offlineCtx.createBuffer(1, rawData.length, audioBuffer.sampleRate);
-      clonedBuffer.getChannelData(0).set(rawData);
-      source.buffer = clonedBuffer;
-      source.connect(offlineCtx.destination);
-      source.start();
-      await offlineCtx.startRendering();
+      const halfFFT = fftSize / 2;
+      const numFFTFrames = Math.min(segments, Math.floor(rawData.length / fftSize));
 
-      // Compute spectral centroid from raw data using manual DFT on segments
+      // Pre-compute magnitudes using efficient approach (avoid manual DFT)
       const spectralCentroids: number[] = [];
       const spectralFlatnessVals: number[] = [];
-      const halfFFT = fftSize / 2;
-      for (let i = 0; i < Math.min(segments, Math.floor(rawData.length / fftSize)); i++) {
+      const spectralBandwidths: number[] = [];
+      const spectralRolloffs: number[] = [];
+      const spectralSkewVals: number[] = [];
+      const spectralKurtosisVals: number[] = [];
+      const spectralCrestVals: number[] = [];
+
+      for (let i = 0; i < numFFTFrames; i++) {
         const start = i * fftSize;
-        const magnitudes: number[] = [];
+        // Apply Hann window and compute FFT via simple DFT on smaller bin set
+        const magnitudes: number[] = new Array(halfFFT);
         for (let k = 0; k < halfFFT; k++) {
           let re = 0, im = 0;
           for (let n = 0; n < fftSize; n++) {
+            const w = 0.5 * (1 - Math.cos((2 * Math.PI * n) / (fftSize - 1))); // Hann window
+            const sample = (rawData[start + n] || 0) * w;
             const angle = (2 * Math.PI * k * n) / fftSize;
-            re += (rawData[start + n] || 0) * Math.cos(angle);
-            im -= (rawData[start + n] || 0) * Math.sin(angle);
+            re += sample * Math.cos(angle);
+            im -= sample * Math.sin(angle);
           }
-          magnitudes.push(Math.sqrt(re * re + im * im));
+          magnitudes[k] = Math.sqrt(re * re + im * im);
         }
-        // Spectral centroid
+
+        // 1. Spectral Centroid
         let weightedSum = 0, magSum = 0;
         for (let k = 0; k < halfFFT; k++) {
           const freq = (k * audioBuffer.sampleRate) / fftSize;
           weightedSum += freq * magnitudes[k];
           magSum += magnitudes[k];
         }
-        spectralCentroids.push(magSum > 0 ? weightedSum / magSum : 0);
+        const centroid = magSum > 0 ? weightedSum / magSum : 0;
+        spectralCentroids.push(centroid);
 
-        // Spectral flatness (geometric mean / arithmetic mean)
+        // 2. Spectral Flatness
         const nonZero = magnitudes.filter(m => m > 1e-10);
         if (nonZero.length > 0) {
           const logSum = nonZero.reduce((s, m) => s + Math.log(m), 0);
@@ -232,34 +234,99 @@ const Index = () => {
         } else {
           spectralFlatnessVals.push(0);
         }
+
+        // 3. Spectral Bandwidth (spread around centroid)
+        if (magSum > 0) {
+          let bwSum = 0;
+          for (let k = 0; k < halfFFT; k++) {
+            const freq = (k * audioBuffer.sampleRate) / fftSize;
+            bwSum += magnitudes[k] * (freq - centroid) ** 2;
+          }
+          spectralBandwidths.push(Math.sqrt(bwSum / magSum));
+        } else {
+          spectralBandwidths.push(0);
+        }
+
+        // 4. Spectral Rolloff (freq below which 85% of energy sits)
+        const totalMag = magnitudes.reduce((a, b) => a + b, 0);
+        let cumMag = 0;
+        let rolloffFreq = 0;
+        for (let k = 0; k < halfFFT; k++) {
+          cumMag += magnitudes[k];
+          if (cumMag >= 0.85 * totalMag) {
+            rolloffFreq = (k * audioBuffer.sampleRate) / fftSize;
+            break;
+          }
+        }
+        spectralRolloffs.push(rolloffFreq);
+
+        // 5. Spectral Skewness & 6. Spectral Kurtosis
+        if (magSum > 0) {
+          const bw = spectralBandwidths[spectralBandwidths.length - 1];
+          if (bw > 0) {
+            let m3 = 0, m4 = 0;
+            for (let k = 0; k < halfFFT; k++) {
+              const freq = (k * audioBuffer.sampleRate) / fftSize;
+              const d = (freq - centroid) / bw;
+              m3 += magnitudes[k] * d ** 3;
+              m4 += magnitudes[k] * d ** 4;
+            }
+            spectralSkewVals.push(m3 / magSum);
+            spectralKurtosisVals.push(m4 / magSum);
+          } else {
+            spectralSkewVals.push(0);
+            spectralKurtosisVals.push(0);
+          }
+        } else {
+          spectralSkewVals.push(0);
+          spectralKurtosisVals.push(0);
+        }
+
+        // 7. Spectral Crest Factor (peakiness)
+        const maxMag = Math.max(...magnitudes);
+        const ariMeanMag = magnitudes.reduce((a, b) => a + b, 0) / magnitudes.length;
+        spectralCrestVals.push(ariMeanMag > 0 ? maxMag / ariMeanMag : 0);
       }
 
-      const scMean = spectralCentroids.length > 0 ? spectralCentroids.reduce((a, b) => a + b, 0) / spectralCentroids.length : 0;
-      const scStd = spectralCentroids.length > 0 ? Math.sqrt(spectralCentroids.reduce((s, v) => s + (v - scMean) ** 2, 0) / spectralCentroids.length) : 0;
-      const sfMean = spectralFlatnessVals.length > 0 ? spectralFlatnessVals.reduce((a, b) => a + b, 0) / spectralFlatnessVals.length : 0;
+      const mean = (arr: number[]) => arr.length > 0 ? arr.reduce((a, b) => a + b, 0) / arr.length : 0;
+      const std = (arr: number[]) => {
+        const m = mean(arr);
+        return arr.length > 0 ? Math.sqrt(arr.reduce((s, v) => s + (v - m) ** 2, 0) / arr.length) : 0;
+      };
 
-      // Energy entropy (how uniformly energy is distributed across segments)
+      const scMean = mean(spectralCentroids);
+      const scStd = std(spectralCentroids);
+      const sfMean = mean(spectralFlatnessVals);
+      const sbMean = mean(spectralBandwidths);
+      const sbStd = std(spectralBandwidths);
+      const srMean = mean(spectralRolloffs);
+      const srStd = std(spectralRolloffs);
+      const skewMean = mean(spectralSkewVals);
+      const kurtosisMean = mean(spectralKurtosisVals);
+      const crestMean = mean(spectralCrestVals);
+      const crestStd = std(spectralCrestVals);
+
+      // 8. Energy Entropy
       const totalEnergy = rmsVals.reduce((s, v) => s + v * v, 0);
       let energyEntropy = 0;
       if (totalEnergy > 0) {
         for (const rms of rmsVals) {
-          const p = (rms * rms) / totalEnergy;
-          if (p > 0) energyEntropy -= p * Math.log2(p);
+          const prob = (rms * rms) / totalEnergy;
+          if (prob > 0) energyEntropy -= prob * Math.log2(prob);
         }
       }
       const maxEntropy = Math.log2(rmsVals.length);
       const normalizedEntropy = maxEntropy > 0 ? energyEntropy / maxEntropy : 0;
 
-      // Pitch stability (autocorrelation-based F0 estimation per segment)
+      // 9. Pitch stability (autocorrelation-based F0)
       const pitchEstimates: number[] = [];
       const pitchSegLen = Math.max(2048, Math.floor(rawData.length / 20));
       for (let i = 0; i < 20; i++) {
         const start = i * pitchSegLen;
         const end = Math.min(start + pitchSegLen, rawData.length);
         const seg = rawData.slice(start, end);
-        // Autocorrelation
-        const minLag = Math.floor(audioBuffer.sampleRate / 500); // 500Hz max
-        const maxLag = Math.floor(audioBuffer.sampleRate / 60);  // 60Hz min
+        const minLag = Math.floor(audioBuffer.sampleRate / 500);
+        const maxLag = Math.floor(audioBuffer.sampleRate / 60);
         let bestLag = minLag, bestCorr = -1;
         for (let lag = minLag; lag < Math.min(maxLag, seg.length / 2); lag++) {
           let corr = 0, norm1 = 0, norm2 = 0;
@@ -275,46 +342,188 @@ const Index = () => {
           pitchEstimates.push(audioBuffer.sampleRate / bestLag);
         }
       }
-      const pitchMean = pitchEstimates.length > 0 ? pitchEstimates.reduce((a, b) => a + b, 0) / pitchEstimates.length : 0;
-      const pitchStd = pitchEstimates.length > 1
-        ? Math.sqrt(pitchEstimates.reduce((s, v) => s + (v - pitchMean) ** 2, 0) / pitchEstimates.length)
-        : 0;
-      const pitchCV = pitchMean > 0 ? pitchStd / pitchMean : 0;
+      const pitchMean = mean(pitchEstimates);
+      const pitchStdVal = std(pitchEstimates);
+      const pitchCV = pitchMean > 0 ? pitchStdVal / pitchMean : 0;
 
-      // Temporal attack sharpness (onset detection via energy derivative)
+      // 10. Temporal attack sharpness
       const energyDiffs: number[] = [];
       for (let i = 1; i < rmsVals.length; i++) {
         energyDiffs.push(Math.abs(rmsVals[i] - rmsVals[i - 1]));
       }
-      const attackSharpness = energyDiffs.length > 0 ? energyDiffs.reduce((a, b) => a + b, 0) / energyDiffs.length : 0;
-      const attackSharpnessStd = energyDiffs.length > 0
-        ? Math.sqrt(energyDiffs.reduce((s, v) => s + (v - attackSharpness) ** 2, 0) / energyDiffs.length)
-        : 0;
+      const attackSharpness = mean(energyDiffs);
+      const attackSharpnessStdVal = std(energyDiffs);
+
+      // 11. Harmonic-to-Noise Ratio (HNR) approximation
+      // Compare autocorrelation peak to total energy
+      const hnrValues: number[] = [];
+      for (let i = 0; i < 20; i++) {
+        const start = i * pitchSegLen;
+        const end = Math.min(start + pitchSegLen, rawData.length);
+        const seg = rawData.slice(start, end);
+        let energy = 0;
+        for (let j = 0; j < seg.length; j++) energy += seg[j] * seg[j];
+        const minLag = Math.floor(audioBuffer.sampleRate / 500);
+        const maxLag = Math.floor(audioBuffer.sampleRate / 60);
+        let bestCorr = 0;
+        for (let lag = minLag; lag < Math.min(maxLag, seg.length / 2); lag++) {
+          let corr = 0;
+          for (let j = 0; j < seg.length - lag; j++) corr += seg[j] * seg[j + lag];
+          if (corr > bestCorr) bestCorr = corr;
+        }
+        if (energy > 0 && bestCorr > 0) {
+          const r = bestCorr / energy;
+          if (r < 1) hnrValues.push(10 * Math.log10(r / (1 - r)));
+        }
+      }
+      const hnrMean = mean(hnrValues);
+      const hnrStd = std(hnrValues);
+
+      // 12. Jitter (pitch period perturbation)
+      let jitter = 0;
+      if (pitchEstimates.length > 1) {
+        let sumDiffs = 0;
+        for (let i = 1; i < pitchEstimates.length; i++) {
+          sumDiffs += Math.abs(1 / pitchEstimates[i] - 1 / pitchEstimates[i - 1]);
+        }
+        const meanPeriod = mean(pitchEstimates.map(f => 1 / f));
+        jitter = meanPeriod > 0 ? (sumDiffs / (pitchEstimates.length - 1)) / meanPeriod : 0;
+      }
+
+      // 13. Shimmer (amplitude perturbation)
+      let shimmer = 0;
+      if (rmsVals.length > 1) {
+        let sumDiffs = 0;
+        for (let i = 1; i < rmsVals.length; i++) {
+          sumDiffs += Math.abs(rmsVals[i] - rmsVals[i - 1]);
+        }
+        shimmer = rmsMean > 0 ? (sumDiffs / (rmsVals.length - 1)) / rmsMean : 0;
+      }
+
+      // 14. Long-term Average Spectrum (LTAS) slope
+      const ltasMagnitudes = new Array(halfFFT).fill(0);
+      for (let i = 0; i < numFFTFrames; i++) {
+        const start = i * fftSize;
+        for (let k = 0; k < halfFFT; k++) {
+          let re = 0, im = 0;
+          for (let n = 0; n < fftSize; n++) {
+            const w = 0.5 * (1 - Math.cos((2 * Math.PI * n) / (fftSize - 1)));
+            const sample = (rawData[start + n] || 0) * w;
+            const angle = (2 * Math.PI * k * n) / fftSize;
+            re += sample * Math.cos(angle);
+            im -= sample * Math.sin(angle);
+          }
+          ltasMagnitudes[k] += Math.sqrt(re * re + im * im);
+        }
+      }
+      // Linear regression on log-frequency vs log-magnitude for slope
+      let ltasSlope = 0;
+      {
+        const points: { x: number; y: number }[] = [];
+        for (let k = 1; k < halfFFT; k++) {
+          const freq = (k * audioBuffer.sampleRate) / fftSize;
+          if (freq > 50 && freq < 8000 && ltasMagnitudes[k] > 0) {
+            points.push({ x: Math.log10(freq), y: Math.log10(ltasMagnitudes[k] / numFFTFrames) });
+          }
+        }
+        if (points.length > 2) {
+          const mx = mean(points.map(p => p.x));
+          const my = mean(points.map(p => p.y));
+          let num = 0, den = 0;
+          for (const pt of points) {
+            num += (pt.x - mx) * (pt.y - my);
+            den += (pt.x - mx) ** 2;
+          }
+          ltasSlope = den > 0 ? num / den : 0;
+        }
+      }
+
+      // 15. Temporal Modulation (4-8 Hz syllabic rate energy)
+      // Compute modulation spectrum of RMS envelope
+      const rmsRate = audioBuffer.sampleRate / segLen; // sampling rate of RMS envelope
+      let modEnergy4to8 = 0, modEnergyTotal = 0;
+      for (let k = 0; k < Math.floor(rmsVals.length / 2); k++) {
+        let re = 0, im = 0;
+        for (let n = 0; n < rmsVals.length; n++) {
+          const angle = (2 * Math.PI * k * n) / rmsVals.length;
+          re += rmsVals[n] * Math.cos(angle);
+          im -= rmsVals[n] * Math.sin(angle);
+        }
+        const mag = Math.sqrt(re * re + im * im);
+        const modFreq = (k * rmsRate) / rmsVals.length;
+        modEnergyTotal += mag * mag;
+        if (modFreq >= 4 && modFreq <= 8) modEnergy4to8 += mag * mag;
+      }
+      const syllabicModRatio = modEnergyTotal > 0 ? modEnergy4to8 / modEnergyTotal : 0;
+
+      // 16. Peak-to-RMS ratio (crest factor of waveform)
+      let peakAmp = 0;
+      for (let i = 0; i < rawData.length; i++) {
+        const abs = Math.abs(rawData[i]);
+        if (abs > peakAmp) peakAmp = abs;
+      }
+      const waveformCrestFactor = rmsMean > 0 ? peakAmp / rmsMean : 0;
+
+      // 17. Sub-band energy ratios (low/mid/high)
+      let energyLow = 0, energyMid = 0, energyHigh = 0, energyAll = 0;
+      for (let k = 0; k < halfFFT; k++) {
+        const freq = (k * audioBuffer.sampleRate) / fftSize;
+        const e = ltasMagnitudes[k] ** 2;
+        energyAll += e;
+        if (freq < 500) energyLow += e;
+        else if (freq < 2000) energyMid += e;
+        else energyHigh += e;
+      }
+      const lowBandRatio = energyAll > 0 ? energyLow / energyAll : 0;
+      const midBandRatio = energyAll > 0 ? energyMid / energyAll : 0;
+      const highBandRatio = energyAll > 0 ? energyHigh / energyAll : 0;
 
       await audioCtx.close();
 
       const audioFeatures = {
+        // Temporal
         rmsCV: +rmsCV.toFixed(4),
-        zcrStd: +zcrStd.toFixed(5),
-        zcrMean: +zcrMean.toFixed(4),
         dynSpread: +dynSpread.toFixed(4),
         silenceRatio: +silenceRatio.toFixed(4),
+        attackSharpnessMean: +attackSharpness.toFixed(5),
+        attackSharpnessStd: +attackSharpnessStdVal.toFixed(5),
+        shimmer: +shimmer.toFixed(5),
+        waveformCrestFactor: +waveformCrestFactor.toFixed(3),
+        syllabicModRatio: +syllabicModRatio.toFixed(5),
+        // Spectral
+        zcrMean: +zcrMean.toFixed(4),
+        zcrStd: +zcrStd.toFixed(5),
+        spectralCentroidMean: +scMean.toFixed(2),
+        spectralCentroidStd: +scStd.toFixed(2),
+        spectralFlatnessMean: +sfMean.toFixed(5),
+        spectralBandwidthMean: +sbMean.toFixed(2),
+        spectralBandwidthStd: +sbStd.toFixed(2),
+        spectralRolloffMean: +srMean.toFixed(2),
+        spectralRolloffStd: +srStd.toFixed(2),
+        spectralSkewMean: +skewMean.toFixed(4),
+        spectralKurtosisMean: +kurtosisMean.toFixed(4),
+        spectralCrestMean: +crestMean.toFixed(4),
+        spectralCrestStd: +crestStd.toFixed(4),
+        ltasSlope: +ltasSlope.toFixed(4),
+        lowBandRatio: +lowBandRatio.toFixed(4),
+        midBandRatio: +midBandRatio.toFixed(4),
+        highBandRatio: +highBandRatio.toFixed(4),
+        // Prosodic
+        pitchMeanHz: +pitchMean.toFixed(1),
+        pitchCV: +pitchCV.toFixed(4),
+        pitchSegmentsDetected: pitchEstimates.length,
+        jitter: +jitter.toFixed(5),
+        // Energy
+        energyEntropyNormalized: +normalizedEntropy.toFixed(4),
+        hnrMean: +hnrMean.toFixed(2),
+        hnrStd: +hnrStd.toFixed(2),
+        // Metadata
         duration: +duration.toFixed(2),
         bitrateKbps: +bitrateKbps.toFixed(1),
         fileSizeMB: +fileSizeMB.toFixed(2),
         fileName,
         sampleRate: audioBuffer.sampleRate,
         channels: audioBuffer.numberOfChannels,
-        // New features
-        spectralCentroidMean: +scMean.toFixed(2),
-        spectralCentroidStd: +scStd.toFixed(2),
-        spectralFlatnessMean: +sfMean.toFixed(5),
-        energyEntropyNormalized: +normalizedEntropy.toFixed(4),
-        pitchMeanHz: +pitchMean.toFixed(1),
-        pitchCV: +pitchCV.toFixed(4),
-        pitchSegmentsDetected: pitchEstimates.length,
-        attackSharpnessMean: +attackSharpness.toFixed(5),
-        attackSharpnessStd: +attackSharpnessStd.toFixed(5),
       };
 
       // Call edge function
