@@ -231,20 +231,18 @@ const Index = () => {
         new Uint8Array(fileBuffer).reduce((data, byte) => data + String.fromCharCode(byte), "")
       );
 
-      // Send to custom backend
-      const BACKEND_URL = "https://e2d242517012af97-103-211-18-113.serveousercontent.com";
-      const response = await fetch(BACKEND_URL, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ audio: base64Audio, audioFeatures }),
+      // Send via edge function proxy to avoid CORS
+      const { data, error } = await supabase.functions.invoke("proxy-analyze", {
+        body: { audio: base64Audio, audioFeatures },
       });
 
-      if (!response.ok) {
-        const errText = await response.text();
-        throw new Error(`Backend error (${response.status}): ${errText}`);
+      if (error) {
+        throw new Error(error.message || "Proxy call failed");
       }
 
-      const data = await response.json();
+      if (data?.error) {
+        throw new Error(data.error);
+      }
 
       // Map backend response: expects { prediction: string, confidence: number }
       const isFake = typeof data.prediction === "string"
