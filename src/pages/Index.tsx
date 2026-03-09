@@ -119,7 +119,7 @@ const Index = () => {
     mediaRecorderRef.current = null;
   }, []);
 
-  const BACKEND_URL = "https://65162f82f6d318c0-103-211-18-113.serveousercontent.com";
+  const BACKEND_URL = "https://65162f82f6d318c0-103-211-18-113.serveousercontent.com/detect_voice";
 
   const analyzeFile = useCallback(async () => {
     if (!currentFile) return;
