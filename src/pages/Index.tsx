@@ -128,6 +128,9 @@ const Index = () => {
     setIsLoading(true);
     setResult(null);
 
+    // Small delay to let React render the loading UI before heavy computation
+    await new Promise(resolve => setTimeout(resolve, 100));
+
     try {
       // Extract audio features client-side
       const arrayBuffer = await currentFile.arrayBuffer();
