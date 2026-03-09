@@ -60,7 +60,8 @@ ENERGY & VOICE QUALITY:
 - hnrMean/Std: Harmonic-to-noise ratio. Very high HNR with low std = synthetic clarity
   
 METADATA:
-- duration, bitrateKbps, fileName, sampleRate, channels
+- duration, bitrateKbps, sampleRate, channels
+- IMPORTANT: IGNORE the fileName field completely. It is anonymized and contains no useful signal. Base your analysis ONLY on acoustic features.
 
 ANALYSIS STRATEGY:
 1. Cross-correlate features: low pitchCV + low spectralCentroidStd + high energyEntropy + low jitter + low shimmer = STRONG synthetic signal
