@@ -128,18 +128,75 @@ const Index = () => {
     setIsLoading(true);
     setResult(null);
 
-    // Small delay to let React render the loading UI before heavy computation
-    await new Promise(resolve => setTimeout(resolve, 100));
-
     try {
-      // Extract audio features client-side
+      // Decode audio on main thread (requires AudioContext)
       const arrayBuffer = await currentFile.arrayBuffer();
       const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
       const audioBuffer = await audioCtx.decodeAudioData(arrayBuffer.slice(0));
       const rawData = audioBuffer.getChannelData(0);
-      const duration = audioBuffer.duration;
-      const fileName = currentFile.name.toLowerCase();
-      const fileSizeMB = currentFile.size / (1024 * 1024);
+      await audioCtx.close();
+
+      // Run heavy feature extraction in Web Worker (off main thread)
+      const audioFeatures = await new Promise<Record<string, any>>((resolve, reject) => {
+        const worker = new Worker(
+          new URL("../workers/audioFeatureExtractor.ts", import.meta.url),
+          { type: "module" }
+        );
+        worker.onmessage = (e) => {
+          resolve(e.data);
+          worker.terminate();
+        };
+        worker.onerror = (e) => {
+          reject(new Error(e.message || "Worker error"));
+          worker.terminate();
+        };
+        const rawCopy = new Float32Array(rawData);
+        worker.postMessage(
+          {
+            rawData: rawCopy,
+            sampleRate: audioBuffer.sampleRate,
+            duration: audioBuffer.duration,
+            channels: audioBuffer.numberOfChannels,
+            fileSize: currentFile.size,
+          },
+          [rawCopy.buffer]
+        );
+      });
+
+      // Call edge function
+      const { data, error } = await supabase.functions.invoke("analyze-audio", {
+        body: { audioFeatures },
+      });
+
+      if (error) {
+        throw new Error(error.message || "Edge function call failed");
+      }
+
+      if (data?.error) {
+        throw new Error(data.error);
+      }
+
+      const synProb = data.synthetic_probability ?? 0.5;
+      setResult({
+        synthetic_probability: synProb,
+        human_probability: 1 - synProb,
+        alert: synProb > 0.5,
+        confidence: data.confidence,
+        reasoning: data.reasoning,
+        key_indicators: data.key_indicators,
+      });
+    } catch (err: any) {
+      console.error("Analysis failed:", err);
+      toast({
+        title: "Analysis failed",
+        description: err.message || "Could not analyze the audio file.",
+        variant: "destructive",
+      });
+    }
+
+    setIsLoading(false);
+    setShowFeedbackThanks(false);
+  }, [currentFile, toast]);
 
       const segments = 80;
       const segLen = Math.max(256, Math.floor(rawData.length / segments));
