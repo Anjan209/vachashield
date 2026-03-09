@@ -1,13 +1,10 @@
 import { useState, useRef, useCallback } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { Upload, RotateCcw, Download, ShieldCheck, AlertTriangle, Mic, MicOff, Shield, Zap, Waves, Clock } from "lucide-react";
-import { useAnalysisHistory } from "@/hooks/use-analysis-history";
-import { HistoryPanel } from "@/components/HistoryPanel";
+import { Upload, RotateCcw, Download, ShieldCheck, AlertTriangle, Mic, MicOff, Shield, Zap, Waves } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/hooks/use-toast";
 import { Link } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
-import { computeSpectralStats } from "@/lib/audio-features";
 
 type AnalysisResult = {
   synthetic_probability: number;
@@ -70,8 +67,6 @@ const AnimatedHeadline = () => {
 
 const Index = () => {
   const { toast } = useToast();
-  const { history, addEntry, clearHistory } = useAnalysisHistory();
-  const [historyOpen, setHistoryOpen] = useState(false);
   const [currentFile, setCurrentFile] = useState<File | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [result, setResult] = useState<AnalysisResult | null>(null);
@@ -140,7 +135,7 @@ const Index = () => {
       const audioBuffer = await audioCtx.decodeAudioData(arrayBuffer.slice(0));
       const rawData = audioBuffer.getChannelData(0);
       const duration = audioBuffer.duration;
-      
+      const fileName = currentFile.name.toLowerCase();
       const fileSizeMB = currentFile.size / (1024 * 1024);
 
       const segments = 80;
@@ -187,26 +182,6 @@ const Index = () => {
       // Bitrate
       const bitrateKbps = duration > 0 ? (currentFile.size * 8) / duration / 1000 : 0;
 
-      // Spectral stats (helps detect overly-smooth/over-regular synthetic speech)
-      let spectral = {
-        spectralCentroidMean: 0,
-        spectralCentroidStd: 0,
-        spectralFlatnessMean: 0,
-        spectralRolloffMean: 0,
-        spectralFluxMean: 0,
-      };
-      try {
-        spectral = computeSpectralStats(rawData, audioBuffer.sampleRate, {
-          maxSeconds: 20,
-          targetSampleRate: 16000,
-          frameSize: 2048,
-          hopSize: 1024,
-          rolloffEnergy: 0.85,
-        });
-      } catch {
-        // If spectral extraction fails, continue with the simpler features.
-      }
-
       await audioCtx.close();
 
       const audioFeatures = {
@@ -218,58 +193,32 @@ const Index = () => {
         duration: +duration.toFixed(2),
         bitrateKbps: +bitrateKbps.toFixed(1),
         fileSizeMB: +fileSizeMB.toFixed(2),
-
-        spectralCentroidMean: +spectral.spectralCentroidMean.toFixed(4),
-        spectralCentroidStd: +spectral.spectralCentroidStd.toFixed(4),
-        spectralFlatnessMean: +spectral.spectralFlatnessMean.toFixed(4),
-        spectralRolloffMean: +spectral.spectralRolloffMean.toFixed(4),
-        spectralFluxMean: +spectral.spectralFluxMean.toFixed(4),
-
+        fileName,
         sampleRate: audioBuffer.sampleRate,
         channels: audioBuffer.numberOfChannels,
       };
 
-      // Convert audio file to base64
-      const fileBuffer = await currentFile.arrayBuffer();
-      const base64Audio = btoa(
-        new Uint8Array(fileBuffer).reduce((data, byte) => data + String.fromCharCode(byte), "")
-      );
-
-      // Send via edge function proxy to avoid CORS
-      const { data, error } = await supabase.functions.invoke("proxy-analyze", {
-        body: { audio: base64Audio, audioFeatures },
+      // Call edge function
+      const { data, error } = await supabase.functions.invoke("analyze-audio", {
+        body: { audioFeatures },
       });
 
       if (error) {
-        throw new Error(error.message || "Proxy call failed");
+        throw new Error(error.message || "Edge function call failed");
       }
 
       if (data?.error) {
         throw new Error(data.error);
       }
 
-      // Map backend response: expects { prediction: string, confidence: number }
-      const isFake = typeof data.prediction === "string"
-        ? data.prediction.toLowerCase().includes("fake") || data.prediction.toLowerCase().includes("synthetic") || data.prediction.toLowerCase().includes("ai")
-        : false;
-      const synProb = isFake ? (data.confidence ?? 0.8) : (1 - (data.confidence ?? 0.8));
-
-      const analysisResult: AnalysisResult = {
+      const synProb = data.synthetic_probability ?? 0.5;
+      setResult({
         synthetic_probability: synProb,
         human_probability: 1 - synProb,
         alert: synProb > 0.5,
-        confidence: data.confidence > 0.8 ? "high" : data.confidence > 0.5 ? "medium" : "low",
-        reasoning: data.reasoning || `Backend prediction: ${data.prediction} (confidence: ${data.confidence})`,
-        key_indicators: data.key_indicators || [data.prediction],
-      };
-
-      setResult(analysisResult);
-
-      // Save to history
-      addEntry({
-        fileName: currentFile.name,
-        fileSize: currentFile.size,
-        ...analysisResult,
+        confidence: data.confidence,
+        reasoning: data.reasoning,
+        key_indicators: data.key_indicators,
       });
     } catch (err: any) {
       console.error("Analysis failed:", err);
@@ -309,9 +258,6 @@ const Index = () => {
           </div>
         </div>
         <div className="flex items-center gap-3">
-          <Button variant="ghost" size="sm" className="font-mono text-xs text-muted-foreground hover:text-primary" onClick={() => setHistoryOpen(true)}>
-            <Clock className="w-3.5 h-3.5 mr-1.5" /> HISTORY{history.length > 0 ? ` (${history.length})` : ""}
-          </Button>
           <Link to="/mobile" className="text-xs text-muted-foreground hover:text-primary transition-colors font-mono uppercase tracking-wider">
             Mobile App →
           </Link>
@@ -610,9 +556,6 @@ const Index = () => {
       <footer className="relative z-10 text-center py-8 text-xs text-muted-foreground/40 font-mono">
         Vacha-Shield • Neural Voice Authentication Engine
       </footer>
-
-      {/* History Panel */}
-      <HistoryPanel history={history} onClear={clearHistory} open={historyOpen} onClose={() => setHistoryOpen(false)} />
     </div>
   );
 };
