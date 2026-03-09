@@ -1,6 +1,8 @@
 import { useState, useRef, useCallback } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { Upload, RotateCcw, Download, ShieldCheck, AlertTriangle, Mic, MicOff, Shield, Zap, Waves } from "lucide-react";
+import { Upload, RotateCcw, Download, ShieldCheck, AlertTriangle, Mic, MicOff, Shield, Zap, Waves, Clock } from "lucide-react";
+import { useAnalysisHistory } from "@/hooks/use-analysis-history";
+import { HistoryPanel } from "@/components/HistoryPanel";
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/hooks/use-toast";
 import { Link } from "react-router-dom";
@@ -68,6 +70,8 @@ const AnimatedHeadline = () => {
 
 const Index = () => {
   const { toast } = useToast();
+  const { history, addEntry, clearHistory } = useAnalysisHistory();
+  const [historyOpen, setHistoryOpen] = useState(false);
   const [currentFile, setCurrentFile] = useState<File | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [result, setResult] = useState<AnalysisResult | null>(null);
@@ -250,13 +254,22 @@ const Index = () => {
         : false;
       const synProb = isFake ? (data.confidence ?? 0.8) : (1 - (data.confidence ?? 0.8));
 
-      setResult({
+      const analysisResult: AnalysisResult = {
         synthetic_probability: synProb,
         human_probability: 1 - synProb,
         alert: synProb > 0.5,
         confidence: data.confidence > 0.8 ? "high" : data.confidence > 0.5 ? "medium" : "low",
         reasoning: data.reasoning || `Backend prediction: ${data.prediction} (confidence: ${data.confidence})`,
         key_indicators: data.key_indicators || [data.prediction],
+      };
+
+      setResult(analysisResult);
+
+      // Save to history
+      addEntry({
+        fileName: currentFile.name,
+        fileSize: currentFile.size,
+        ...analysisResult,
       });
     } catch (err: any) {
       console.error("Analysis failed:", err);
@@ -296,6 +309,9 @@ const Index = () => {
           </div>
         </div>
         <div className="flex items-center gap-3">
+          <Button variant="ghost" size="sm" className="font-mono text-xs text-muted-foreground hover:text-primary" onClick={() => setHistoryOpen(true)}>
+            <Clock className="w-3.5 h-3.5 mr-1.5" /> HISTORY{history.length > 0 ? ` (${history.length})` : ""}
+          </Button>
           <Link to="/mobile" className="text-xs text-muted-foreground hover:text-primary transition-colors font-mono uppercase tracking-wider">
             Mobile App →
           </Link>
@@ -594,6 +610,9 @@ const Index = () => {
       <footer className="relative z-10 text-center py-8 text-xs text-muted-foreground/40 font-mono">
         Vacha-Shield • Neural Voice Authentication Engine
       </footer>
+
+      {/* History Panel */}
+      <HistoryPanel history={history} onClear={clearHistory} open={historyOpen} onClose={() => setHistoryOpen(false)} />
     </div>
   );
 };
