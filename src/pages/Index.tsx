@@ -131,7 +131,7 @@ const Index = () => {
       try {
         const formData = new FormData();
         formData.append("file", currentFile);
-        const response = await fetch(`${BACKEND_URL}/predict`, { method: "POST", body: formData });
+        const response = await fetch(BACKEND_URL, { method: "POST", body: formData });
         if (!response.ok) throw new Error(`Server error: ${response.status}`);
         const data = await response.json();
         const synProb = data.synthetic_probability ?? data.fake_probability ?? data.probability ?? 0;
