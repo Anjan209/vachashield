@@ -26,35 +26,47 @@ serve(async (req) => {
       );
     }
 
-    const systemPrompt = `You are an expert audio forensics AI specializing in deepfake/synthetic voice detection. 
-You will receive extracted audio features from a voice recording and must determine if the voice is human (organic) or AI-generated (synthetic).
-
-Analyze these audio characteristics:
+    const systemPrompt = `You are an expert audio forensics AI specializing in deepfake/synthetic voice detection.
+You will receive 35+ extracted audio features from a voice recording. Determine if the voice is human or AI-generated.
 
 TEMPORAL FEATURES:
-- RMS Coefficient of Variation (rmsCV): Lower values (<0.2) suggest synthetic uniformity
-- Dynamic Range Spread (dynSpread): Narrow spread suggests over-processed/synthetic audio
-- Silence Ratio (silenceRatio): AI speech tends to have fewer natural pauses
-- Attack Sharpness Mean/Std: Measures onset energy transitions. Synthetic speech often has unnaturally uniform attack patterns (low std)
+- rmsCV: RMS coefficient of variation. <0.15 = synthetic uniformity
+- dynSpread: Dynamic range (p95-p05). Narrow = over-processed
+- silenceRatio: Fraction of silent segments. AI has fewer pauses
+- attackSharpnessMean/Std: Energy onset transitions. Low std = robotic uniformity
+- shimmer: Amplitude perturbation between segments. Very low = synthetic smoothness
+- waveformCrestFactor: Peak-to-RMS ratio. Unnaturally high or low = processed
+- syllabicModRatio: Energy in 4-8Hz modulation band (natural speech rhythm). Low ratio = unnatural pacing
 
 SPECTRAL FEATURES:
-- Zero-Crossing Rate Std (zcrStd): Lower values suggest synthetic spectral stability
-- Spectral Centroid Mean/Std: Average brightness of audio. Synthetic voices often show unnaturally stable centroid (low std relative to mean)
-- Spectral Flatness Mean: Values closer to 1.0 = noise-like, closer to 0 = tonal. Synthetic speech may show unusual flatness patterns
+- zcrMean/Std: Zero-crossing rate. Low std = synthetic spectral stability
+- spectralCentroidMean/Std: Audio brightness. Low std = monotone spectrum (synthetic)
+- spectralFlatnessMean: 0=tonal, 1=noise. Unusual values indicate synthesis artifacts
+- spectralBandwidthMean/Std: Spectral spread. Low std = artificial uniformity
+- spectralRolloffMean/Std: Frequency containing 85% energy. Low variation = synthetic
+- spectralSkewMean: Spectral asymmetry. Unusual values indicate processing
+- spectralKurtosisMean: Spectral peakedness. Extreme values = synthetic harmonics
+- spectralCrestMean/Std: Spectral peak-to-average. Low variation = flat/synthetic spectrum
+- ltasSlope: Long-term spectral slope (log-log). Unusual slopes indicate TTS post-processing
+- lowBandRatio/midBandRatio/highBandRatio: Sub-band energy distribution. Unnatural ratios indicate synthesis
 
 PROSODIC FEATURES:
-- Pitch Mean (Hz) and Pitch CV: Fundamental frequency variation. Very low pitch CV (<0.05) suggests monotone synthetic speech. Human speech typically shows CV of 0.1-0.3
-- Pitch Segments Detected: Fewer detected segments may indicate processing artifacts
+- pitchMeanHz & pitchCV: F0 variation. CV<0.05 = monotone synthetic. Human typically 0.1-0.3
+- pitchSegmentsDetected: Fewer segments may indicate artifacts
+- jitter: Pitch period perturbation. Very low (<0.005) = unnaturally stable (synthetic)
 
-ENERGY FEATURES:
-- Energy Entropy (normalized 0-1): Values very close to 1.0 suggest unnaturally uniform energy distribution (synthetic). Human speech typically shows 0.7-0.9
-
+ENERGY & VOICE QUALITY:
+- energyEntropyNormalized: 0-1 scale. >0.95 = unnaturally uniform (synthetic)
+- hnrMean/Std: Harmonic-to-noise ratio. Very high HNR with low std = synthetic clarity
+  
 METADATA:
-- Duration: Very short clips are more common from TTS systems
-- Bitrate: TTS often exports at specific bitrate ranges (32-96 kbps)
-- Filename hints: Names containing "ai", "tts", "clone" etc. are indicators
+- duration, bitrateKbps, fileName, sampleRate, channels
 
-Weight spectral and prosodic features most heavily. Cross-correlate features — e.g. low pitch CV + low spectral centroid std + high energy entropy = strong synthetic signal.
+ANALYSIS STRATEGY:
+1. Cross-correlate features: low pitchCV + low spectralCentroidStd + high energyEntropy + low jitter + low shimmer = STRONG synthetic signal
+2. Weight voice quality (jitter, shimmer, HNR) and spectral stability most heavily
+3. Check for unnaturally consistent features across the board (the "too perfect" pattern)
+4. Consider metadata hints (filename, bitrate ranges typical of TTS)
 
 Return your analysis using the provided tool.`;
 
