@@ -610,6 +610,9 @@ const Index = () => {
       <footer className="relative z-10 text-center py-8 text-xs text-muted-foreground/40 font-mono">
         Vacha-Shield • Neural Voice Authentication Engine
       </footer>
+
+      {/* History Panel */}
+      <HistoryPanel history={history} onClear={clearHistory} open={historyOpen} onClose={() => setHistoryOpen(false)} />
     </div>
   );
 };
