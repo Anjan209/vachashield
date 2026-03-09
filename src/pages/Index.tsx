@@ -70,6 +70,8 @@ const AnimatedHeadline = () => {
 
 const Index = () => {
   const { toast } = useToast();
+  const { history, addEntry, clearHistory } = useAnalysisHistory();
+  const [historyOpen, setHistoryOpen] = useState(false);
   const [currentFile, setCurrentFile] = useState<File | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [result, setResult] = useState<AnalysisResult | null>(null);
