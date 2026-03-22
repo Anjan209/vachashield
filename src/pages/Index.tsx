@@ -120,167 +120,126 @@ const Index = () => {
     mediaRecorderRef.current = null;
   }, []);
 
-  const BACKEND_URL = ""; // TODO: Set your deployed Flask backend URL here, e.g. "https://your-app.onrender.com"
+  const extractAudioFeatures = async (file: File) => {
+    const arrayBuffer = await file.arrayBuffer();
+    const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
+    const audioBuffer = await audioCtx.decodeAudioData(arrayBuffer.slice(0));
+    const rawData = audioBuffer.getChannelData(0);
+    const duration = audioBuffer.duration;
+    const fileSizeMB = file.size / (1024 * 1024);
+    const bitrateKbps = duration > 0 ? (file.size * 8) / duration / 1000 : 0;
+
+    const segments = 80;
+    const segLen = Math.max(256, Math.floor(rawData.length / segments));
+
+    // RMS envelope
+    const rmsVals: number[] = [];
+    for (let i = 0; i < segments; i++) {
+      let sum = 0;
+      const start = i * segLen;
+      const end = Math.min(start + segLen, rawData.length);
+      for (let j = start; j < end; j++) sum += rawData[j] * rawData[j];
+      rmsVals.push(Math.sqrt(sum / Math.max(1, end - start)));
+    }
+    const rmsMean = rmsVals.reduce((a, b) => a + b, 0) / rmsVals.length;
+    const rmsStd = Math.sqrt(rmsVals.reduce((s, v) => s + (v - rmsMean) ** 2, 0) / rmsVals.length);
+    const rmsCV = rmsMean > 0 ? rmsStd / rmsMean : 0;
+
+    // Silence ratio
+    const silenceThreshold = rmsMean * 0.12;
+    const silenceRatio = rmsVals.filter((v) => v < silenceThreshold).length / rmsVals.length;
+
+    // ZCR
+    const zcrVals: number[] = [];
+    for (let i = 0; i < segments; i++) {
+      const start = i * segLen;
+      const end = Math.min(start + segLen, rawData.length);
+      let crossings = 0;
+      for (let j = start + 1; j < end; j++) {
+        if ((rawData[j] >= 0) !== (rawData[j - 1] >= 0)) crossings++;
+      }
+      zcrVals.push(crossings / Math.max(1, end - start));
+    }
+    const zcrMean = zcrVals.reduce((a, b) => a + b, 0) / zcrVals.length;
+    const zcrStd = Math.sqrt(zcrVals.reduce((s, v) => s + (v - zcrMean) ** 2, 0) / zcrVals.length);
+
+    // Dynamic range
+    const absSamples = Array.from(rawData).map((v) => Math.abs(v));
+    // Sample for performance (take every Nth sample)
+    const step = Math.max(1, Math.floor(absSamples.length / 10000));
+    const sampled = absSamples.filter((_, i) => i % step === 0).sort((a, b) => a - b);
+    const p = (q: number) => sampled[Math.floor((sampled.length - 1) * q)] ?? 0;
+    const p95 = p(0.95);
+    const p05 = p(0.05);
+    const dynSpread = p95 - p05;
+    const maxAmp = sampled[sampled.length - 1] ?? 0;
+
+    // Envelope smoothness
+    const rmsDiffs: number[] = [];
+    for (let i = 1; i < rmsVals.length; i++) {
+      rmsDiffs.push(Math.abs(rmsVals[i] - rmsVals[i - 1]));
+    }
+    const rmsDiffMean = rmsDiffs.reduce((a, b) => a + b, 0) / rmsDiffs.length;
+    const envelopeSmoothness = Math.sqrt(rmsDiffs.reduce((s, v) => s + (v - rmsDiffMean) ** 2, 0) / rmsDiffs.length);
+
+    // Spectral centroid approximation via ZCR * sample rate
+    const sampleRate = audioBuffer.sampleRate;
+    const spectralCentroids = zcrVals.map((z) => z * sampleRate * 0.5);
+    const spectralCentroidMean = spectralCentroids.reduce((a, b) => a + b, 0) / spectralCentroids.length;
+    const spectralCentroidStd = Math.sqrt(spectralCentroids.reduce((s, v) => s + (v - spectralCentroidMean) ** 2, 0) / spectralCentroids.length);
+
+    await audioCtx.close();
+
+    return {
+      duration, fileSizeMB, bitrateKbps,
+      rmsMean, rmsStd, rmsCV,
+      zcrMean, zcrStd,
+      silenceRatio, dynSpread, p95, p05, maxAmp,
+      envelopeSmoothness,
+      spectralCentroidMean, spectralCentroidStd,
+    };
+  };
 
   const analyzeFile = useCallback(async () => {
     if (!currentFile) return;
     setIsLoading(true);
     setResult(null);
 
-    if (BACKEND_URL) {
-      // Real backend call
-      try {
-        const formData = new FormData();
-        formData.append("file", currentFile);
-        const response = await fetch(`${BACKEND_URL}/predict`, { method: "POST", body: formData });
-        if (!response.ok) throw new Error(`Server error: ${response.status}`);
-        const data = await response.json();
-        const synProb = data.synthetic_probability ?? data.fake_probability ?? data.probability ?? 0;
-        setResult({ synthetic_probability: synProb, human_probability: 1 - synProb, alert: synProb > 0.5 });
-      } catch (err: any) {
-        toast({ title: "Analysis failed", description: err.message || "Could not reach the backend server.", variant: "destructive" });
-      }
-    } else {
-      // Client-side heuristic (no backend): more stable AI vs organic separation
-      await new Promise((r) => setTimeout(r, 1200));
+    try {
+      // Extract features client-side
+      const features = await extractAudioFeatures(currentFile);
 
-      let synProb: number;
+      // Send features to AI backend for classification
+      const { data, error } = await supabase.functions.invoke("analyze-audio", {
+        body: { features },
+      });
 
-      if (demoMode) {
-        synProb = 0.88 + Math.random() * 0.1;
-      } else {
-        try {
-          const arrayBuffer = await currentFile.arrayBuffer();
-          const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
-          const audioBuffer = await audioCtx.decodeAudioData(arrayBuffer.slice(0));
-          const rawData = audioBuffer.getChannelData(0);
-          const duration = audioBuffer.duration;
-          const fileName = currentFile.name.toLowerCase();
-          const fileSizeMB = currentFile.size / (1024 * 1024);
-
-          const segments = 80;
-          const segLen = Math.max(256, Math.floor(rawData.length / segments));
-
-          // RMS envelope per segment
-          const rmsVals: number[] = [];
-          for (let i = 0; i < segments; i++) {
-            let sum = 0;
-            const start = i * segLen;
-            const end = Math.min(start + segLen, rawData.length);
-            for (let j = start; j < end; j++) sum += rawData[j] * rawData[j];
-            const denom = Math.max(1, end - start);
-            rmsVals.push(Math.sqrt(sum / denom));
-          }
-
-          const rmsMean = rmsVals.reduce((a, b) => a + b, 0) / rmsVals.length;
-          const rmsStd = Math.sqrt(rmsVals.reduce((s, v) => s + (v - rmsMean) ** 2, 0) / rmsVals.length);
-          const rmsCV = rmsMean > 0 ? rmsStd / rmsMean : 0;
-
-          // Silence / pause pattern
-          const silenceThreshold = rmsMean * 0.12;
-          const silent = rmsVals.filter((v) => v < silenceThreshold).length;
-          const silenceRatio = silent / rmsVals.length;
-
-          // Zero crossing metrics (per segment)
-          const zcrVals: number[] = [];
-          for (let i = 0; i < segments; i++) {
-            const start = i * segLen;
-            const end = Math.min(start + segLen, rawData.length);
-            let crossings = 0;
-            for (let j = start + 1; j < end; j++) {
-              if ((rawData[j] >= 0) !== (rawData[j - 1] >= 0)) crossings++;
-            }
-            const denom = Math.max(1, end - start);
-            zcrVals.push(crossings / denom);
-          }
-          const zcrMean = zcrVals.reduce((a, b) => a + b, 0) / zcrVals.length;
-          const zcrStd = Math.sqrt(zcrVals.reduce((s, v) => s + (v - zcrMean) ** 2, 0) / zcrVals.length);
-
-          // Amplitude percentile spread (dynamic range proxy)
-          const absSamples = rawData.map((v) => Math.abs(v));
-          const sorted = absSamples.slice().sort((a, b) => a - b);
-          const p = (q: number) => sorted[Math.floor((sorted.length - 1) * q)] ?? 0;
-          const dynSpread = p(0.95) - p(0.05);
-
-          // Effective bitrate proxy
-          const bitrateKbps = duration > 0 ? (currentFile.size * 8) / duration / 1000 : 0;
-
-          // --- Scoring ---
-          let score = 0.5;
-
-          // AI tends to be shorter clips
-          if (duration < 4) score += 0.18;
-          else if (duration < 8) score += 0.1;
-          else if (duration > 20) score -= 0.12;
-
-          // AI often has fewer natural pauses
-          if (silenceRatio < 0.025) score += 0.16;
-          else if (silenceRatio < 0.05) score += 0.08;
-          else if (silenceRatio > 0.1 && silenceRatio < 0.4) score -= 0.1;
-
-          // Human speech is usually less uniform in loudness
-          if (rmsCV < 0.18) score += 0.16;
-          else if (rmsCV < 0.26) score += 0.08;
-          else if (rmsCV > 0.45) score -= 0.12;
-
-          // ZCR variation: too stable can indicate synthetic generation
-          if (zcrStd < 0.012) score += 0.12;
-          else if (zcrStd < 0.02) score += 0.06;
-          else if (zcrStd > 0.035) score -= 0.08;
-
-          // Dynamic spread: very narrow spread often sounds over-smoothed (AI)
-          if (dynSpread < 0.22) score += 0.14;
-          else if (dynSpread > 0.42) score -= 0.1;
-
-          // Bitrate window seen often in TTS exports
-          if (bitrateKbps >= 32 && bitrateKbps <= 96) score += 0.05;
-          else if (bitrateKbps > 160) score -= 0.05;
-
-          // Name hints (strong prior)
-          if (
-            fileName.includes("ai") ||
-            fileName.includes("synthetic") ||
-            fileName.includes("generated") ||
-            fileName.includes("tts") ||
-            fileName.includes("clone") ||
-            fileName.includes("deepfake")
-          ) {
-            score += 0.22;
-          }
-          if (
-            fileName.includes("recording") ||
-            fileName.includes("voice memo") ||
-            fileName.includes("mic") ||
-            fileName.includes("human") ||
-            fileName.includes("organic") ||
-            fileName.includes("real")
-          ) {
-            score -= 0.2;
-          }
-
-          // Extra correction for large, long files (more likely organic capture)
-          if (duration > 18 && fileSizeMB > 1.2) score -= 0.1;
-
-          // If near undecided, bias slightly toward synthetic to reduce AI false negatives
-          if (Math.abs(score - 0.5) < 0.07) score += 0.08;
-
-          // Small noise to avoid identical repeated outputs
-          score += (Math.random() - 0.5) * 0.03;
-
-          synProb = Math.max(0.06, Math.min(0.94, score));
-          await audioCtx.close();
-        } catch (err) {
-          console.error("Audio analysis failed:", err);
-          synProb = 0.6 + (Math.random() - 0.5) * 0.08;
-        }
+      if (error) {
+        throw new Error(error.message || "Analysis failed");
       }
 
-      setResult({ synthetic_probability: synProb, human_probability: 1 - synProb, alert: synProb > 0.5 });
+      if (data?.error) {
+        throw new Error(data.error);
+      }
+
+      const synProb = Math.max(0.02, Math.min(0.98, data.synthetic_probability ?? 0.5));
+      setResult({
+        synthetic_probability: synProb,
+        human_probability: 1 - synProb,
+        alert: synProb > 0.5,
+      });
+    } catch (err: any) {
+      console.error("Analysis error:", err);
+      toast({
+        title: "Analysis failed",
+        description: err.message || "Could not analyze the audio file.",
+        variant: "destructive",
+      });
     }
 
     setIsLoading(false);
     setShowFeedbackThanks(false);
-  }, [currentFile, demoMode, toast]);
+  }, [currentFile, toast]);
 
   const resetUI = useCallback(() => {
     setCurrentFile(null);
