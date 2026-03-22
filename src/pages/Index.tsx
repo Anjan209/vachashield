@@ -164,7 +164,7 @@ const Index = () => {
     const zcrStd = Math.sqrt(zcrVals.reduce((s, v) => s + (v - zcrMean) ** 2, 0) / zcrVals.length);
 
     // Dynamic range
-    const absSamples = Array.from(rawData).map((v) => Math.abs(v));
+    const absSamples = Array.from(rawData).map((v: number) => Math.abs(v));
     // Sample for performance (take every Nth sample)
     const step = Math.max(1, Math.floor(absSamples.length / 10000));
     const sampled = absSamples.filter((_, i) => i % step === 0).sort((a, b) => a - b);
